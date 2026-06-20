@@ -336,9 +336,9 @@ gemini-canvas-proxy/
 - The model name in your request doesn't match what Canvas is promoting
 - Try `gemini-3-flash-preview`, `gemini-2.5-flash-preview-05-20`, or check Google's current Canvas model
 
-### Tool calling returns malformed_function_call
-- Gemini rejects certain JSON Schema fields in tool definitions. The proxy automatically sanitizes schemas, but if you're using a custom tool source that generates unusual schemas, check for unsupported fields (`$schema`, `additionalProperties`, `format`, `nullable`, `title`)
-- Make sure you're running the latest `gemini_proxy.py` — it includes automatic schema sanitization
+### [ERROR] Expected identifier but found "!"
+- **Cause**: You are pasting the `canvas-proxy.html` code into a **JavaScript/React** canvas. Gemini uses `esbuild` to compile these, and it fails when it sees HTML tags like `<!DOCTYPE html>`.
+- **Fix**: Use the **`canvas-proxy.js`** version instead. It is pure JSX and works in the default React canvas. Or, tell Gemini "Create an HTML file" before pasting the `.html` version.
 
 ---
 
