@@ -154,7 +154,7 @@ def openai_to_gemini(body):
                 result_obj = json.loads(result_text)
             except Exception:
                 result_obj = {"output": result_text}
-            contents.append({"role": "user", "parts": [{"functionResponse": {"name": func_name, "response": result_obj}}]})
+            contents.append({"role": "function", "parts": [{"functionResponse": {"name": func_name, "response": result_obj}}]})
             continue
 
         # ── Multimodal content (images, mixed text+image) ────────────────
