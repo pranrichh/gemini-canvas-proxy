@@ -422,9 +422,14 @@ class APIHandler(BaseHTTPRequestHandler):
         serialized = json.dumps(message_payload, separators=(',', ':')).encode('utf-8')
 
         if len(serialized) > 900_000:
-            # Payload too large for native messaging — use HTTP fetch workaround
+            # Payload too large for native messaging (1MB limit).
+            # Strategy: Write payload to a temp file and serve via HTTP.
+            # Send both the HTTP URL and file path to the extension.
+            # The service worker tries HTTP fetch first; if that fails
+            # (Chromium snap network isolation), the content script can
+            # read the file via a different mechanism.
             payload_store[req_id] = gemini_body
-            sys.stderr.write(f"[Proxy] Large payload ({len(serialized)}B), using HTTP fetch workaround\n")
+            sys.stderr.write(f"[Proxy] Large payload ({len(serialized)}B), using fetch workaround\n")
             sys.stderr.flush()
             send_message({
                 "type": "api_request",
@@ -433,6 +438,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 "path": f"/v1beta/models/{model}:generateContent",
                 "fetch_payload": True,
                 "payload_url": f"http://127.0.0.1:{HOST_PORT}/internal/payload/{req_id}",
+                "payload_url_alt": f"http://localhost:{HOST_PORT}/internal/payload/{req_id}",
                 "headers": {}
             })
         else:

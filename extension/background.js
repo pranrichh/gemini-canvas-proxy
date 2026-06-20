@@ -84,20 +84,33 @@ async function handleApiRequest(msg) {
     // If the payload was too large for native messaging (>1MB), fetch it via HTTP.
     // Extension service workers can fetch() from localhost without Local Network
     // Access restrictions — this bypasses the 1MB native messaging limit entirely.
+    // We try 127.0.0.1 first, then localhost as a fallback (some environments
+    // like Chromium snap may resolve one but not the other).
     let body = msg.body;
-    if (msg.fetch_payload && msg.payload_url) {
-        try {
-            console.log('[Proxy] Fetching large payload from', msg.payload_url);
-            const resp = await fetch(msg.payload_url);
-            body = await resp.json();
-            console.log('[Proxy] Payload fetched, size:', JSON.stringify(body).length, 'bytes');
-        } catch (err) {
-            console.error('[Proxy] Failed to fetch payload:', err);
+    if (msg.fetch_payload) {
+        const urls = [msg.payload_url, msg.payload_url_alt].filter(Boolean);
+        let fetched = false;
+        for (const url of urls) {
+            try {
+                console.log('[Proxy] Fetching large payload from', url);
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    body = await resp.json();
+                    console.log('[Proxy] Payload fetched, size:', JSON.stringify(body).length, 'bytes');
+                    fetched = true;
+                    break;
+                }
+            } catch (err) {
+                console.warn('[Proxy] Fetch failed for', url, ':', err.message);
+            }
+        }
+        if (!fetched) {
+            console.error('[Proxy] All payload fetch attempts failed');
             if (nativePort) {
                 nativePort.postMessage({
                     type: 'api_response',
                     id: msg.id,
-                    error: 'Failed to fetch large payload: ' + err.message
+                    error: 'Failed to fetch large payload from all URLs'
                 });
             }
             return;
