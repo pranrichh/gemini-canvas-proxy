@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ Gemini Canvas Proxy</title>
+    <!--
+        ═══════════════════════════════════════════════════════════════
+        GEMINI CANVAS PROXY — Canvas Page
+        ═══════════════════════════════════════════════════════════════
+
+        This file runs INSIDE the Gemini Canvas sandboxed iframe.
+        It has two responsibilities:
+
+        1. Call the Gemini API using Canvas's auto-injected credentials
+           (Canvas replaces the empty string in `const apiKey = ""` with
+           a real unlimited API key at compile time)
+
+        2. Communicate with the Chrome extension via postMessage
+           (postMessage works across sandbox boundaries — no WebSocket,
+           no Local Network Access issues)
+
+        Communication flow:
+            Extension background → content script → postMessage → THIS PAGE
+            → fetch(gemini API) → response → postMessage → content script
+            → extension → native host → HTTP response to caller
+
+        CREDIT: The postMessage bridge concept was inspired by coxcelot's
+        "I am canceled" autobrowsing agent harness.
+        https://github.com/coxcelot/iamcanceledpresentsagenericautobrowsingagentharness
+    -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #0a0b0e;
+            --surface: #131619;
+            --surface2: #181c20;
+            --border: #252c35;
+            --text: #e2e8f0;
+            --text-muted: #6b7a8a;
+            --primary: #3ecfcf;
+            --primary-glow: rgba(62, 207, 207, 0.15);
+            --green: #22c55e;
+            --red: #ef4444;
+            --yellow: #eab308;
+        }
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+        .app {
+            max-width: 640px;
+            margin: 0 auto;
+            padding: 24px 16px;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .logo {
+            font-size: 1.75rem;
+            line-height: 1;
+        }
+        .title h1 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        .title p {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 16px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            margin-bottom: 12px;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            transition: all 0.3s;
+        }
+        .status-dot.online {
+            background: var(--green);
+            box-shadow: 0 0 12px var(--green);
+        }
+        .status-dot.offline { background: var(--red); }
+        .status-dot.waiting {
+            background: var(--yellow);
+            animation: pulse 1.2s ease-in-out infinite;
+        }
+        @keyframes pulse { 50% { opacity: 0.3; } }
+        .status-text {
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .status-detail {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-left: auto;
+        }
+        .stats-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .stat {
+            flex: 1;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        .stat-label {
+            font-size: 0.6rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 2px;
+        }
+        .log-container {
+            max-height: 280px;
+            overflow-y: auto;
+        }
+        .log-container::-webkit-scrollbar { width: 4px; }
+        .log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        .log-entry {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 5px 0;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.72rem;
+            line-height: 1.5;
+            border-bottom: 1px solid rgba(37, 44, 53, 0.5);
+        }
+        .log-time {
+            color: var(--text-muted);
+            flex-shrink: 0;
+            font-size: 0.65rem;
+        }
+        .log-arrow { flex-shrink: 0; }
+        .log-arrow.in { color: var(--primary); }
+        .log-arrow.out { color: var(--yellow); }
+        .log-arrow.ok { color: var(--green); }
+        .log-arrow.err { color: var(--red); }
+        .log-text { color: var(--text); word-break: break-all; }
+        .log-text.ok { color: var(--green); }
+        .log-text.err { color: var(--red); }
+        .log-text.muted { color: var(--text-muted); }
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+        }
+    </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+// ═══════════════════════════════════════════════════════════════
+// CANVAS AUTO-INJECT PATTERN
+// Canvas scans for `apiKey = ""` and replaces the empty string
+// with the unlimited internal API key at compile time.
+// DO NOT modify this line — it's the magic that makes everything work.
+// ═══════════════════════════════════════════════════════════════
+const apiKey = "";
+
+const { useState, useEffect, useRef, useCallback } = React;
+
+function App() {
+    const [status, setStatus] = useState('waiting'); // waiting | online | offline
+    const [logs, setLogs] = useState([]);
+    const [stats, setStats] = useState({ total: 0, success: 0, errors: 0 });
+    const logEndRef = useRef(null);
+
+    const addLog = useCallback((arrow, text, type = '') => {
+        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+        setLogs(prev => [...prev.slice(-99), { time, arrow, text, type, id: Date.now() + Math.random() }]);
+        if (type === 'ok') setStats(s => ({ ...s, total: s.total + 1, success: s.success + 1 }));
+        else if (type === 'err') setStats(s => ({ ...s, total: s.total + 1, errors: s.errors + 1 }));
+    }, []);
+
+    useEffect(() => {
+        logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [logs]);
+
+    // Announce readiness to the extension (content script in parent frame)
+    useEffect(() => {
+        const announce = () => {
+            window.parent.postMessage({ source: 'gemini-proxy-ready' }, '*');
+            // Don't check apiKey — Canvas may inject it at compile time
+            // but the variable might appear empty to runtime checks.
+            // Instead, show online immediately — the first request will
+            // prove whether the key works.
+            setStatus('online');
+            addLog('✓', 'Proxy ready — waiting for requests via extension bridge', 'ok');
+        };
+        const timer = setTimeout(announce, 500);
+        return () => clearTimeout(timer);
+    }, [addLog]);
+
+    // Listen for API requests from the extension
+    useEffect(() => {
+        const handleMessage = async (event) => {
+            const data = event.data;
+            if (!data || data.source !== 'gemini-proxy-request') return;
+
+            const { id, method, path, body, headers } = data;
+            addLog('→', `${method || 'POST'} ${path}`);
+
+            try {
+                // Build URL with Canvas-injected apiKey
+                let url = `https://generativelanguage.googleapis.com${path}`;
+                if (apiKey) {
+                    url += (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(apiKey);
+                }
+
+                const fetchOptions = {
+                    method: method || 'POST',
+                    headers: { 'Content-Type': 'application/json', ...(headers || {}) }
+                };
+                if (body) fetchOptions.body = JSON.stringify(body);
+
+                const response = await fetch(url, fetchOptions);
+                const statusText = response.ok ? 'OK' : response.statusText || 'Error';
+                addLog('←', `${response.status} ${statusText}`, response.ok ? 'ok' : 'err');
+
+                const respData = await response.json().catch(() => ({}));
+
+                window.parent.postMessage({
+                    source: 'gemini-proxy-response',
+                    id: id,
+                    status: response.status,
+                    data: respData,
+                    error: response.ok ? null : `API ${response.status}: ${JSON.stringify(respData).substring(0, 200)}`
+                }, '*');
+            } catch (err) {
+                addLog('✗', err.message, 'err');
+                window.parent.postMessage({
+                    source: 'gemini-proxy-response',
+                    id: id,
+                    error: err.message
+                }, '*');
+            }
+        };
+
+        window.addEventListener('message', handleMessage);
+        return () => window.removeEventListener('message', handleMessage);
+    }, [addLog]);
+
+    const statusConfig = {
+        waiting: { dot: 'waiting', text: 'Connecting to extension...' },
+        online: { dot: 'online', text: 'Proxy Active' },
+        offline: { dot: 'offline', text: 'Proxy Offline' }
+    };
+    const sc = statusConfig[status];
+
+    return (
+        <div className="app">
+            <div className="header">
+                <div className="logo">⚡</div>
+                <div className="title">
+                    <h1>Gemini Canvas Proxy</h1>
+                    <p>Free unlimited Gemini API via Canvas</p>
+                </div>
+            </div>
+
+            <div className="status-bar">
+                <div className={`status-dot ${sc.dot}`}></div>
+                <div className="status-text">{sc.text}</div>
+                <div className="status-detail">
+                    {apiKey ? `Key: ${apiKey.substring(0, 8)}...` : 'Canvas-managed auth'}
+                </div>
+            </div>
+
+            <div className="stats-row">
+                <div className="stat">
+                    <div className="stat-value">{stats.total}</div>
+                    <div className="stat-label">Requests</div>
+                </div>
+                <div className="stat">
+                    <div className="stat-value" style={{color: 'var(--green)'}}>{stats.success}</div>
+                    <div className="stat-label">Success</div>
+                </div>
+                <div className="stat">
+                    <div className="stat-value" style={{color: 'var(--red)'}}>{stats.errors}</div>
+                    <div className="stat-label">Errors</div>
+                </div>
+            </div>
+
+            <div className="card">
+                <div className="log-container">
+                    {logs.length === 0 ? (
+                        <div className="empty-state">No requests yet. Send a request to localhost:8765 to see logs.</div>
+                    ) : (
+                        logs.map(log => (
+                            <div key={log.id} className="log-entry">
+                                <span className="log-time">{log.time}</span>
+                                <span className={`log-arrow ${log.arrow === '←' ? 'in' : log.arrow === '→' ? 'out' : log.type}`}>{log.arrow}</span>
+                                <span className={`log-text ${log.type}`}>{log.text}</span>
+                            </div>
+                        ))
+                    )}
+                    <div ref={logEndRef} />
+                </div>
+            </div>
+        </div>
+    );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

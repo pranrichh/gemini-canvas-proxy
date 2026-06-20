@@ -1,0 +1,28 @@
+{
+    "manifest_version": 3,
+    "name": "Gemini Canvas Proxy Bridge",
+    "version": "1.0.0",
+    "description": "Routes API requests through Gemini Canvas for free unlimited inference. Uses postMessage bridge — no WebSocket, no Local Network Access issues.",
+    "permissions": [
+        "activeTab",
+        "scripting",
+        "tabs",
+        "nativeMessaging"
+    ],
+    "host_permissions": [
+        "<all_urls>"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": ["<all_urls>"],
+            "js": ["content_script.js"],
+            "run_at": "document_start",
+            "all_frames": true,
+            "match_about_blank": true,
+            "match_origin_as_fallback": true
+        }
+    ]
+}

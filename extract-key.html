@@ -1,0 +1,58 @@
+<!-- 
+  KEY EXTRACTOR — Paste this into Gemini Canvas Code view FIRST
+  
+  This page intercepts fetch() calls to extract the internal API key
+  that Google injects into Canvas apps. Once extracted, it forwards
+  the key to the proxy extension via postMessage.
+  
+  Steps:
+  1. Tell Gemini: "Create a simple web app that calls the Gemini API to say hello"
+  2. Switch to Code tab — the generated code should have the internal key
+  3. Look for: generativelanguage.googleapis.com/v1beta/...?key=AIzaSy...
+  4. Copy the key (AIzaSy...) and paste it into the main proxy page
+-->
+<!DOCTYPE html>
+<html>
+<head><title>Key Extractor</title></head>
+<body style="background:#0d0f12;color:#c8d4e0;font-family:monospace;padding:20px;">
+<h2 style="color:#3ecfcf;">🔑 Canvas Key Extractor</h2>
+<p style="color:#6b7a8a;">Instructions: Tell Gemini to "create a web app that calls the Gemini API"</p>
+<p style="color:#6b7a8a;">Then look at the generated code for a key starting with AIzaSy...</p>
+<div id="output" style="margin-top:16px;padding:12px;background:#131619;border:1px solid #252c35;border-radius:8px;">
+Waiting for fetch() calls...
+</div>
+
+<script>
+const out = document.getElementById('output');
+const origFetch = window.fetch;
+
+window.fetch = async function(...args) {
+    const url = args[0]?.toString?.() || args[0];
+    if (url && url.includes('generativelanguage.googleapis.com')) {
+        try {
+            const urlObj = new URL(url);
+            const key = urlObj.searchParams.get('key');
+            if (key) {
+                out.innerHTML = '<span style="color:#22c55e;font-weight:bold;">✓ FOUND KEY: ' + key.substring(0, 10) + '...' + key.substring(key.length-4) + '</span><br><br>' +
+                    '<span style="color:#eab308;">Full key (copy this):</span><br>' +
+                    '<input type="text" value="' + key + '" style="width:100%;padding:8px;background:#181c20;border:1px solid #252c35;color:#c8d4e0;font-family:monospace;border-radius:4px;margin-top:4px;" onclick="this.select()">';
+                
+                // Store in localStorage for the proxy to pick up
+                localStorage.setItem('gemini_canvas_key', key);
+                
+                // Also post to parent for the extension to pick up
+                window.parent.postMessage({source: 'gemini-key-found', key: key}, '*');
+            }
+        } catch(e) {}
+    }
+    return origFetch.apply(this, args);
+};
+
+// Also check if key is already in localStorage
+const saved = localStorage.getItem('gemini_canvas_key');
+if (saved) {
+    out.innerHTML = '<span style="color:#22c55e;">✓ Previously found key: ' + saved.substring(0, 10) + '...</span>';
+}
+</script>
+</body>
+</html>
