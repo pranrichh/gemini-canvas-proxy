@@ -19,6 +19,13 @@ NATIVE_HOST_NAME="com.gemini.proxy"
 HOST_SCRIPT="$SCRIPT_DIR/native_host/gemini_proxy.py"
 HOST_MANIFEST_TEMPLATE="$SCRIPT_DIR/native_host/com.gemini.proxy.json"
 
+# Sanity check: make sure we're in the right directory
+if [ ! -f "$HOST_SCRIPT" ]; then
+    echo "✗ ERROR: gemini_proxy.py not found at $HOST_SCRIPT"
+    echo "  Make sure you're running this from the gemini-canvas-proxy directory."
+    exit 1
+fi
+
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║          ⚡  Gemini Canvas Proxy — Setup  ⚡                  ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
