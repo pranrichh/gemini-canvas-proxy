@@ -424,6 +424,8 @@ class APIHandler(BaseHTTPRequestHandler):
         if len(serialized) > 900_000:
             # Payload too large for native messaging — use HTTP fetch workaround
             payload_store[req_id] = gemini_body
+            sys.stderr.write(f"[Proxy] Large payload ({len(serialized)}B), using HTTP fetch workaround\n")
+            sys.stderr.flush()
             send_message({
                 "type": "api_request",
                 "id": req_id,
