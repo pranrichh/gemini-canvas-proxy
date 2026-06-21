@@ -28,28 +28,26 @@ chmod +x setup.sh
 ./setup.sh  # Follow prompts for Extension ID
 ```
 
-## 3. Interactive Setup (Web-based VNC)
-The easiest way to interact with the VPS browser is through **noVNC**. This lets you see and control the VPS desktop directly in your local browser (no VNC client needed).
+## 3. Web-Based Browser Access (noVNC)
+This is the simplest way to interact with the VPS browser. It streams the browser directly to your local laptop's browser over Tailscale.
 
-1. Install the tools on the VPS:
+1. Install the streaming tools on the VPS:
    ```bash
    sudo apt update
-   sudo apt install -y x11vnc xvfb fluxbox novnc websockify
+   sudo apt install -y x11vnc xvfb novnc websockify
    ```
 
-2. Start the desktop and web-VNC proxy:
+2. Start the browser stream:
    ```bash
    # 1. Start virtual display
    Xvfb :99 -screen 0 1280x720x16 &
    export DISPLAY=:99
    
-   # 2. Start a tiny window manager
-   fluxbox &
+   # 2. Launch Chromium inside the virtual display
+   chromium-browser --user-data-dir=$HOME/.config/chromium-vps --no-first-run &
    
-   # 3. Start VNC server
+   # 3. Stream that display to a web port (6080)
    x11vnc -display :99 -nopw -forever -xkb &
-   
-   # 4. Start the Web-to-VNC proxy (Port 6080)
    websockify --web /usr/share/novnc/ 6080 localhost:5900 &
    ```
 
@@ -57,8 +55,7 @@ The easiest way to interact with the VPS browser is through **noVNC**. This lets
    `http://<vps-tailscale-ip>:6080/vnc.html?autoconnect=true`
 
 4. **In the Web Window:**
-   - You will see the VPS desktop. Right-click anywhere and select **Applications -> Shells -> Bash** (or just run from your SSH terminal).
-   - Launch Chromium: `chromium-browser --user-data-dir=$HOME/.config/chromium-vps`
+   - You will see the VPS Chromium browser.
    - Log in to [gemini.google.com](https://gemini.google.com).
    - Go to `chrome://extensions`, enable **Developer Mode**, and **Load Unpacked** the `extension/` folder.
    - **Copy the Extension ID** and start a Canvas session.
@@ -77,8 +74,6 @@ After you've logged in and loaded the extension, the browser profile is saved. Y
 xvfb-run --server-args="-screen 0 1280x800x24" \
   chromium-browser --user-data-dir=$HOME/.config/chromium-vps
 ```
-
-## 6. Access via Tailscale
 
 ## 6. Access via Tailscale
 The proxy now defaults to binding to `0.0.0.0:8765`, meaning it is reachable from any interface.
