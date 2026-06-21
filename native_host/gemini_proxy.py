@@ -689,12 +689,14 @@ def main():
     standalone = '--standalone' in sys.argv
 
     # Start HTTP server in a proper thread (not daemon — we want clean shutdown)
-    server = ThreadedHTTPServer(('127.0.0.1', port), APIHandler)
+    # 0.0.0.0 allows Tailscale/VPS access. 127.0.0.1 for local only.
+    bind_address = os.environ.get('PROXY_BIND', '127.0.0.1')
+    server = ThreadedHTTPServer((bind_address, port), APIHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
 
     if standalone:
-        sys.stderr.write(f"[Proxy] Standalone mode — HTTP server on http://127.0.0.1:{port}\n")
+        sys.stderr.write(f"[Proxy] Standalone mode — HTTP server on http://{bind_address}:{port}\n")
         sys.stderr.write(f"[Proxy] No native messaging — use curl or point any tool at the URL above\n")
         sys.stderr.flush()
         try:

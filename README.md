@@ -77,10 +77,14 @@ cd gemini-canvas-proxy
 ```
 
 **Linux / macOS:**
+Optionally set `PROXY_BIND=0.0.0.0` to allow access from other devices on your Tailscale network.
 ```bash
-chmod +x setup.sh
+export PROXY_BIND=0.0.0.0
 ./setup.sh
 ```
+
+## ☁️ VPS & Tailscale Deployment
+For 24/7 private API access, see the [VPS Setup Guide](vps_setup.md).
 
 **Windows (PowerShell):**
 ```powershell
