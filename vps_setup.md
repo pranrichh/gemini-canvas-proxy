@@ -43,7 +43,6 @@ Instead of complex VNC setups, we use Chromium's built-in **Remote Debugging**. 
    `http://<vps-tailscale-ip>:9222`
 
 3. **In your local browser:**
-   - You will see a list of open tabs. Click on any link (e.g., "about:blank").
    - Click the **"Screencast" icon** (top-left, looks like a tiny monitor).
    - **You can now see and control the VPS browser!**
    - Navigate to [gemini.google.com](https://gemini.google.com) and log in.
