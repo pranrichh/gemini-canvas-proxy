@@ -702,14 +702,11 @@ def main():
             sys.stderr.write(f"[Proxy] WARNING: Listening on 0.0.0.0 (all interfaces). No authentication is enabled.\n")
         sys.stderr.write(f"[Proxy] No native messaging — use curl or point any tool at the URL above\n")
         sys.stderr.flush()
-    elif bind_address == '0.0.0.0':
+        return
+
+    if bind_address == '0.0.0.0':
         sys.stderr.write(f"[Proxy] Warning: HTTP server listening on 0.0.0.0 (all interfaces).\n")
         sys.stderr.flush()
-        try:
-            server_thread.join()
-        except KeyboardInterrupt:
-            server.shutdown()
-        return
 
     # Tell the extension we're ready
     try:
