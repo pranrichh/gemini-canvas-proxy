@@ -690,14 +690,20 @@ def main():
 
     # Start HTTP server in a proper thread (not daemon — we want clean shutdown)
     # 0.0.0.0 allows Tailscale/VPS access. 127.0.0.1 for local only.
-    bind_address = os.environ.get('PROXY_BIND', '127.0.0.1')
+    # Default to 0.0.0.0 for easier VPS/Tailscale deployment.
+    bind_address = os.environ.get('PROXY_BIND', '0.0.0.0')
     server = ThreadedHTTPServer((bind_address, port), APIHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
 
     if standalone:
         sys.stderr.write(f"[Proxy] Standalone mode — HTTP server on http://{bind_address}:{port}\n")
+        if bind_address == '0.0.0.0':
+            sys.stderr.write(f"[Proxy] WARNING: Listening on 0.0.0.0 (all interfaces). No authentication is enabled.\n")
         sys.stderr.write(f"[Proxy] No native messaging — use curl or point any tool at the URL above\n")
+        sys.stderr.flush()
+    elif bind_address == '0.0.0.0':
+        sys.stderr.write(f"[Proxy] Warning: HTTP server listening on 0.0.0.0 (all interfaces).\n")
         sys.stderr.flush()
         try:
             server_thread.join()

@@ -37,18 +37,14 @@ xvfb-run --server-args="-screen 0 1280x800x24" \
 ```
 
 ## 4. Access via Tailscale
-The proxy binds to `127.0.0.1:8765` on the VPS. To access it from your local machine:
+The proxy now defaults to binding to `0.0.0.0:8765`, meaning it is reachable from any interface.
 
-**Option A: Global Binding (Private Tailnet Only)**
-Modify `native_host/gemini_proxy.py` line 692:
-```python
-# Change from ('127.0.0.1', port) to ('0.0.0.0', port)
-server = ThreadedHTTPServer(('0.0.0.0', port), APIHandler)
-```
-Now it's reachable at `http://<vps-tailscale-ip>:8765/v1` from any device on your tailnet.
+**Private Access (Recommended)**
+If you are running Tailscale on the VPS, the proxy is automatically reachable at:
+`http://<vps-tailscale-ip>:8765/v1`
 
-**Option B: Tailscale Funnel (No Code Change)**
-Keep it on `127.0.0.1` and use Tailscale Serve to expose it only to your tailnet:
+**Tailscale Funnel (Alternative)**
+If you want to keep the proxy bound specifically to a single interface or use Tailscale's built-in relaying:
 ```bash
 tailscale serve 8765
 ```

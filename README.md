@@ -69,32 +69,16 @@ The OpenAI ↔ Gemini format translation was informed by [CanvasToAPI](https://g
 - **Python 3.8+** (for the native messaging host)
 - A **Google account** with access to [Gemini](https://gemini.google.com)
 
-### 1. Clone & Setup
+### 1. Installation
 
 ```bash
 git clone https://github.com/pranrichh/gemini-canvas-proxy.git
 cd gemini-canvas-proxy
-```
-
-**Linux / macOS:**
-Optionally set `PROXY_BIND=0.0.0.0` to allow access from other devices on your Tailscale network.
-```bash
-export PROXY_BIND=0.0.0.0
 ./setup.sh
 ```
 
-## ☁️ VPS & Tailscale Deployment
-For 24/7 private API access, see the [VPS Setup Guide](vps_setup.md).
-
-**Windows (PowerShell):**
-```powershell
-.\setup.ps1
-```
-
-The setup script will:
-1. Make the Python host executable
-2. Ask for your Chrome extension ID (after you load the extension)
-3. Detect which Chromium browsers are installed and install the native messaging host manifest only for those
+**☁️ Running on a VPS?**
+If you want to deploy this as a 24/7 private API in the cloud using **Tailscale** and a headless browser, follow the [VPS Setup Guide](vps_setup.md).
 
 ### 2. Load the Extension
 
