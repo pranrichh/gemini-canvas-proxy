@@ -1,0 +1,42 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Gemini Canvas Proxy — shared-folder override
+# ──────────────────────────────────────────────────────────────────────────────
+# Merges ON TOP OF docker-compose.yml. Replaces the named `browser-data`
+# volume with a host bind so the container and your host's Chrome/Chromium
+# share the same directory.
+#
+# Use case: you want the native messaging manifest, browser cache, and
+# Canvas session cookies to live in a single directory you control on the
+# host — instead of buried inside Docker's volume store.
+#
+# Usage:
+#   # default — shares a sibling folder ./browser-data
+#   docker compose -f docker-compose.yml -f docker-compose.shared.yml up -d
+#
+#   # custom host path
+#   BROWSER_DATA_HOST=~/.gemini-canvas-proxy/browser-data \
+#     docker compose -f docker-compose.yml -f docker-compose.shared.yml up -d
+#
+# What's actually shared:
+#   - The directory the container writes to at /browser-data
+#   - Anything host-Chrome puts under that same host path
+#     (extension files, native messaging manifests, browser profile if you
+#     point Chrome/Chromium at it via --user-data-dir)
+#
+# Stack it with the VPS override to also bind 0.0.0.0:
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.shared.yml \
+#                  -f docker-compose.vps.yml up -d
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  proxy:
+    volumes:
+      # Replace the named volume with a real host bind. Compose merges
+      # bind lists APPEND-style but REPLACES named-volume mounts with the
+      # same target, so this swap is exactly what you want.
+      # Source defaults to ./browser-data (sibling of docker-compose.yml);
+      # override with $BROWSER_DATA_HOST for any other path.
+      - type: bind
+        source: ${BROWSER_DATA_HOST:-./browser-data}
+        target: /browser-data

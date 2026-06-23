@@ -1,0 +1,39 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Gemini Canvas Proxy — VPS / Tailscale override
+# ──────────────────────────────────────────────────────────────────────────────
+# Merges ON TOP OF docker-compose.yml. Re-binds both the proxy HTTP API
+# (8765) and the noVNC web UI (6080) to 0.0.0.0 so a Tailscale IP
+# (e.g. 100.x.y.z) can reach them. vps_setup.md recommends the same idea.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d
+#
+# Security:
+#   - The proxy has NO authentication. Exposing 8765 on 0.0.0.0 means
+#     anyone who can route to your VPS gets free unlimited Gemini via
+#     your Canvas session. Only do this behind Tailscale (or another
+#     private mesh / firewall that restricts 8765 to known peers).
+#   - noVNC has no VNC password by default. Exposing 6080 on 0.0.0.0
+#     means anyone with the URL can drive the in-container Chromium
+#     and see whatever you see in the browser. Same caveat — keep it
+#     behind Tailscale, or set the VNC_PASSWORD env var and update
+#     entrypoint.sh to pass it to x11vnc via -rfbauth.
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  proxy:
+    ports:
+      # 0.0.0.0:6080:6080 — noVNC reachable from every interface including
+      # the tailnet IP. Compose merges port lists by APPEND-ing, so the
+      # loopback-only bindings from docker-compose.yml stay; this adds
+      # an additional all-interfaces binding on top of them. Remove the
+      # loopback entries from docker-compose.yml if you want pure 0.0.0.0.
+      - "6080:6080"
+      - "8765:8765"
+
+    environment:
+      # Bind on all interfaces INSIDE the container too, so the
+      # port-forwards above have something to forward to.
+      PROXY_BIND: 0.0.0.0
+      PROXY_PORT: "8765"
+      NOVNC_PORT: "6080"

@@ -1,3 +1,17 @@
 # Auto-generated, do not edit
 native_host/com.gemini.proxy.json
 native_host/__pycache__/
+
+# Docker build artefacts (never committed)
+**/*.pyc
+**/__pycache__/
+.venv/
+.env
+
+# Docker compose override scratch / container logs
+docker-compose.override.yml
+.gemini-canvas-proxy/
+
+# Host-side shared folder mount target for the shared-folder override.
+# Created on demand by Docker when the bind source doesn't exist.
+browser-data/

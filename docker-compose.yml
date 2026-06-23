@@ -1,0 +1,126 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Gemini Canvas Proxy — local development / single-host deployment
+# ──────────────────────────────────────────────────────────────────────────────
+# Self-contained Compose: one container runs Xvfb + Openbox + Chromium +
+# x11vnc + websockify + noVNC + the Python proxy. The user logs into
+# Gemini through the noVNC web UI in their own laptop browser, loads
+# the unpacked extension, and runs setup-extension.sh once to register
+# the native messaging manifest.
+#
+# Volumes:
+#   - /browser-data (named volume or host bind) holds:
+#       * Chromium profile + login cookies → survives container restarts
+#       * The auto-generated native messaging manifest
+#   - ./ bind-mount keeps `extension/` resolvable at the same path on both
+#     host and container, so you can `Load unpacked → /app/extension` from
+#     either side.
+#
+# Usage:
+#   docker compose up -d --build
+#   open http://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale
+#   # → log in to gemini.google.com → load extension → copy ID
+#   docker compose exec proxy /app/setup-extension.sh <extension-id>
+#   docker compose restart proxy
+#
+# Override files:
+#   docker compose -f docker-compose.yml -f docker-compose.shared.yml up -d
+#     ↳ binds /browser-data to a host path so host-Chrome can share it
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d
+#     ↳ binds ports to 0.0.0.0 for Tailscale / VPS access
+#   docker compose -f docker-compose.yml -f docker-compose.shared.yml -f docker-compose.vps.yml up -d
+#     ↳ both: 0.0.0.0 bind + shared folder with the host
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: gemini-canvas-proxy
+
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gemini-canvas-proxy:local
+    container_name: gemini-canvas-proxy
+
+    # Default to loopback-only. The Docker daemon proxies these on the host
+    # into the container — nothing on your LAN can reach them. Flip to
+    # 0.0.0.0 via docker-compose.vps.yml if you need tailnet access.
+    ports:
+      # noVNC web UI (HTTPS-style URL: http://127.0.0.1:6080/vnc.html)
+      - "127.0.0.1:6080:6080"
+      # Proxy HTTP API (OpenAI-compatible)
+      - "127.0.0.1:8765:8765"
+
+    # Read-only bind of the repo so /app/extension is resolvable at the
+    # same path the user sees on the host. The `extension/` folder is what
+    # they Load Unpacked into the in-container Chromium.
+    volumes:
+      - .:/app:ro
+      # Named volume for browser-side state (Chromium profile, native
+      # messaging manifest). Purely container-local by default; the
+      # .shared override swaps it for a host bind.
+      - browser-data:/browser-data
+
+    environment:
+      # Proxy HTTP bind inside the container. Port mapping handles the host.
+      PROXY_BIND: 0.0.0.0
+      PROXY_PORT: "8765"
+      # noVNC web UI bind inside the container.
+      NOVNC_PORT: "6080"
+      # VNC server bind (not exposed; websockify bridges to it).
+      VNC_PORT: "5900"
+      # Shared state directories (Chromium profile + native messaging
+      # manifest). Persisted in the browser-data volume.
+      # NOTE: NATIVE_HOST_DIR lives INSIDE the chromium-profile dir so
+      # Chromium auto-discovers the manifest at runtime — see
+      # setup-extension.sh for the discovery rules.
+      BROWSER_DATA_DIR: /browser-data
+      CHROMIUM_USER_DATA_DIR: /browser-data/chromium-profile
+      NATIVE_HOST_DIR: /browser-data/chromium-profile/NativeMessagingHosts
+      PYTHONUNBUFFERED: "1"
+
+    # The full stack needs more than 256 MB of RAM — Chromium alone is
+    # ~150 MB resident. Raise to 1 GB hard limit, 512 MB reservation.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1024M
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+    # /dev/shm defaults to 64 MB in Docker, which Chromium hits on every
+    # page load. Bump it to a full gigabyte and Chromium stops complaining.
+    shm_size: "1g"
+
+    # No TTY, no stdin — websockify/tini handle signal propagation;
+    # Chromium/x11vnc don't read stdin.
+    stdin_open: false
+    tty: false
+
+    # Healthcheck hits the proxy's /health. noVNC has no built-in health
+    # endpoint, but if the proxy is up the rest of the stack usually is
+    # too — Xvfb and websockify either start or they don't.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    restart: unless-stopped
+
+    # Quiet by default; flip to "always" if you're debugging the container.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  # Purely container-local browser cache / state. Lives in Docker's volume
+  # store until you swap it for a host bind via docker-compose.shared.yml.
+  # Survives `docker compose down` and `docker compose up` — only `docker
+  # compose down -v` (or `docker volume rm gemini-canvas-proxy_browser-data`)
+  # will wipe it.
+  browser-data:
