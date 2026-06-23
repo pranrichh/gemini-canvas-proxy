@@ -77,8 +77,8 @@ cd gemini-canvas-proxy
 ./setup.sh
 ```
 
-**☁️ Running on a VPS?**
-If you want to deploy this as a 24/7 private API in the cloud using **Tailscale** and a headless browser, follow the [VPS Setup Guide](vps_setup.md).
+**☁️ Running on a VPS or want Docker?**
+Use the self-contained Docker Compose stack — see [Docker (Self-Contained)](#docker-self-contained) below.
 
 ### 2. Load the Extension
 
@@ -366,9 +366,13 @@ gemini-canvas-proxy/
 ├── setup.sh                   # Setup script (Linux / macOS)
 ├── setup.ps1                  # Setup script (Windows PowerShell)
 ├── stop.sh                    # Stop the proxy (Linux / macOS)
-├── Dockerfile                 # Container image for the native host
-├── docker-compose.yml         # Run the proxy in a container (loopback only)
+├── Dockerfile                 # Self-contained image (Chromium + noVNC + proxy)
+├── docker-compose.yml         # Run the full stack in a container (loopback only)
+├── docker-compose.shared.yml  # Override: share browser-data with host
 ├── docker-compose.vps.yml     # Override: bind 0.0.0.0 for Tailscale/VPS
+├── preflight.sh               # Container root preflight (chown + user drop)
+├── entrypoint.sh              # Container entrypoint (boots full stack)
+├── setup-extension.sh         # In-container extension manifest setup
 └── README.md                  # This file
 ```
 
