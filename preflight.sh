@@ -8,6 +8,7 @@
 # gosu. Tini remains PID 1 the whole time.
 # ──────────────────────────────────────────────────────────────────────────────
 set -e
+set -x
 
 # Chown /browser-data recursively. Cheap on small dirs, expensive on a
 # huge Chromium profile — but only on first boot; subsequent runs hit

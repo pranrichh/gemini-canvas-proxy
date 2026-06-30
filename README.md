@@ -71,10 +71,18 @@ The OpenAI ↔ Gemini format translation was informed by [CanvasToAPI](https://g
 
 ### 1. Installation
 
+**Linux / macOS:**
 ```bash
-git clone https://github.com/pranrichh/gemini-canvas-proxy.git
+git clone https://github.com/ShadowPlague21/gemini-canvas-proxy.git
 cd gemini-canvas-proxy
 ./setup.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/ShadowPlague21/gemini-canvas-proxy.git
+cd gemini-canvas-proxy
+.\setup.ps1
 ```
 
 **☁️ Running on a VPS or want Docker?**
@@ -102,6 +110,7 @@ Use the self-contained Docker Compose stack — see [Docker (Self-Contained)](#d
 
 ### 4. Test It
 
+**Linux / macOS / Git Bash:**
 ```bash
 curl http://127.0.0.1:8765/v1/chat/completions \
   -H 'Content-Type: application/json' \
@@ -109,6 +118,11 @@ curl http://127.0.0.1:8765/v1/chat/completions \
     "model": "gemini-3-flash-preview",
     "messages": [{"role": "user", "content": "Say hello in 5 words"}]
   }'
+```
+
+**Windows (PowerShell):**
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/chat/completions" -Method Post -Headers @{"Content-Type"="application/json"} -Body '{"model":"gemini-3-flash-preview","messages":[{"role":"user","content":"Say hello in 5 words"}]}'
 ```
 
 You should get a standard OpenAI-format response. 🎉
@@ -289,7 +303,9 @@ The proxy uses **native Gemini function calling** for both outgoing tool calls a
 
 #### Option 2: Manual Config
 
-Add the proxy as a custom provider in `~/.hermes/config.yaml`:
+Add the proxy as a custom provider in your Hermes config file:
+* **Linux / macOS**: `~/.hermes/config.yaml`
+* **Windows**: `C:\Users\<YourUsername>\.hermes\config.yaml` (or `$env:USERPROFILE\.hermes\config.yaml`)
 
 ```yaml
 custom_providers:
@@ -308,6 +324,48 @@ hermes chat -q "Say hello" --provider "Local (127.0.0.1:8765)" --model gemini-3-
 ```
 
 **Note:** Full tool calling (terminal, browser, file operations, MCP tools) works through the proxy. Tool calls are generated natively by Gemini, executed by Hermes locally, and results are sent back through the proxy using native `functionResponse` parts.
+
+#### Option 3: Remote / Containerized Setup (Docker / Podman on Windows Host)
+
+If you are running Hermes Agent inside a container (e.g., Docker or Podman) or on another machine in your local network, you can route its traffic to the Gemini Canvas Proxy running on your Windows host:
+
+##### 1. Allow Port 8765 through Windows Firewall
+By default, the Windows Firewall blocks incoming local network traffic. Run this command in an **Administrator PowerShell** window on your Windows host to allow remote connection to the proxy:
+```powershell
+New-NetFirewallRule -DisplayName "Allow Gemini Proxy" -Direction Inbound -LocalPort 8765 -Protocol TCP -Action Allow
+```
+
+##### 2. Configure Hermes inside the Container / VM
+Point the `base_url` to your Windows host's IP address (e.g. `http://<WINDOWS_IP>:8765/v1`):
+```yaml
+custom_providers:
+  - name: "Windows-Gemini-Proxy"
+    base_url: "http://<WINDOWS_IP>:8765/v1"
+    model: "gemini-3-flash-preview"  # Default main model
+    api_mode: "chat_completions"
+
+# Set the active agent model
+active_provider: "Windows-Gemini-Proxy"
+active_model: "gemini-3-flash-preview"
+```
+
+##### 3. Main Agent vs. Auxiliary Models
+* **Main Agent (Orchestration & Tools)**: Use `gemini-3-flash-preview`. It is extremely fast, highly capable, and supports the proxy's native tool-calling translator.
+* **Auxiliary Models (Image Generation)**: Use `gemini-3.1-flash-image-preview` (Nano Banana 2). Call it directly from custom tools or sub-agents in Hermes:
+  ```python
+  from openai import OpenAI
+
+  client = OpenAI(
+      base_url="http://<WINDOWS_IP>:8765/v1",
+      api_key="none"
+  )
+
+  response = client.chat.completions.create(
+      model="gemini-3.1-flash-image-preview",
+      messages=[{"role": "user", "content": "Generate a picture of a futuristic datacenter hosting podman containers"}]
+  )
+  print(response.choices[0].message.content)
+  ```
 
 ### OpenClaw / Any OpenAI-Compatible Tool
 
