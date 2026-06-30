@@ -65,6 +65,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         x11vnc \
         novnc \
         websockify \
+        # Keyring / secret storage for cookie persistence
+        dbus \
+        dbus-x11 \
+        gnome-keyring \
+        libsecret-1-0 \
         # Privilege drop helper — entrypoint runs as root to chown
         # host-bind-mounted /browser-data, then exec's the stack as `proxy`.
         gosu \
@@ -92,10 +97,11 @@ COPY --chown=root:root native_host/ /app/native_host/
 COPY --chown=root:root entrypoint.sh /app/entrypoint.sh
 COPY --chown=root:root setup-extension.sh /app/setup-extension.sh
 COPY --chown=root:root preflight.sh /app/preflight.sh
+COPY --chown=root:root toggle-vnc.sh /app/toggle-vnc.sh
 # chmod 755 not just +x — git checkout / WSL cp can strip group/world bits,
 # so a bare `chmod +x` ends up at 0700 and the proxy user (which IS the
 # group) can't exec them.
-RUN chmod 755 /app/entrypoint.sh /app/setup-extension.sh /app/preflight.sh \
+RUN chmod 755 /app/entrypoint.sh /app/setup-extension.sh /app/preflight.sh /app/toggle-vnc.sh \
     && chmod 755 /app/native_host/gemini_proxy.py
 
 # Intentionally stay as ROOT in the image — preflight.sh chowns

@@ -24,6 +24,7 @@
 
 let nativePort = null;
 let canvasTabId = null;
+let appConfig = { target_chat_id: '', canvas_card_name: '' };
 
 // ── Native messaging host connection ─────────────────────────────────────────
 
@@ -41,7 +42,16 @@ function connectNative() {
 
     // Messages from the Python HTTP server
     nativePort.onMessage.addListener((msg) => {
-        if (msg.type === 'api_request' || msg.type === 'api_request_chunk') {
+        if (msg.type === 'host_ready') {
+            console.log('[Proxy] Host ready, port:', msg.port);
+            if (msg.config) {
+                appConfig = {
+                    target_chat_id: msg.config.target_chat_id || '',
+                    canvas_card_name: msg.config.canvas_card_name || ''
+                };
+                console.log('[Proxy] Config loaded from host:', appConfig);
+            }
+        } else if (msg.type === 'api_request' || msg.type === 'api_request_chunk') {
             handleApiRequest(msg);
         }
     });
@@ -162,6 +172,11 @@ function discoverCanvasTab() {
 // ── Message listeners (from content script) ──────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'get_config') {
+        sendResponse(appConfig);
+        return;
+    }
+
     if (message.type === 'page_ready') {
         canvasTabId = sender.tab.id;
         console.log('[Proxy] Canvas proxy page ready, tab:', canvasTabId);

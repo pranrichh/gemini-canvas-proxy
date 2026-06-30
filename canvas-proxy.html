@@ -4,9 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>⚡ Gemini Canvas Proxy</title>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/htm@3/dist/htm.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
 
@@ -102,6 +99,7 @@
 
         .status-bar.online { border-color: rgba(16, 185, 129, 0.2); }
         .status-bar.offline { border-color: rgba(239, 68, 68, 0.2); }
+        .status-bar.waiting { border-color: rgba(245, 158, 11, 0.2); }
 
         .status-dot {
             width: 9px;
@@ -319,86 +317,158 @@
     </style>
 </head>
 <body>
-<div id="root"></div>
+    <div class="app">
+        <div class="header">
+            <div class="header-row">
+                <div class="header-icon">⚡</div>
+                <h1>Gemini Canvas Proxy</h1>
+            </div>
+            <p>Free unlimited Gemini API via Canvas postMessage bridge</p>
+        </div>
 
-<script>
-const html = htm.bind(React.createElement);
+        <div id="status-bar" class="status-bar waiting">
+            <div id="status-dot" class="status-dot waiting"></div>
+            <span id="status-label" class="status-label">Connecting...</span>
+            <span id="status-badge" class="status-badge inactive">WAITING</span>
+        </div>
 
-// ═══════════════════════════════════════════════════════════════
-// CANVAS AUTO-INJECT — Canvas replaces the empty string with
-// the real API key at compile time. DO NOT modify this line.
-// ═══════════════════════════════════════════════════════════════
-const apiKey = "";
+        <div class="stats-row">
+            <div class="stat-card">
+                <div id="stat-total" class="stat-value default">0</div>
+                <div class="stat-label">Requests</div>
+            </div>
+            <div class="stat-card">
+                <div id="stat-success" class="stat-value success">0</div>
+                <div class="stat-label">Success</div>
+            </div>
+            <div class="stat-card">
+                <div id="stat-errors" class="stat-value error">0</div>
+                <div class="stat-label">Errors</div>
+            </div>
+        </div>
 
-const { useState, useEffect, useRef, useCallback } = React;
+        <div class="log-card">
+            <div class="log-header">
+                <span class="log-header-title">Activity Log</span>
+                <span id="log-header-count" class="log-header-count">0 entries</span>
+            </div>
+            <div id="log-container" class="log-container">
+                <div id="empty-state" class="empty-state">
+                    <div class="empty-state-icon">📡</div>
+                    <div class="empty-state-text">Waiting for requests</div>
+                    <div class="empty-state-hint">curl http://127.0.0.1:8765/v1/chat/completions</div>
+                </div>
+            </div>
+        </div>
 
-function App() {
-    const [status, setStatus] = useState('waiting');
-    const [logs, setLogs] = useState([]);
-    const [stats, setStats] = useState({ total: 0, success: 0, errors: 0 });
-    const logEndRef = useRef(null);
+        <div class="footer">
+            <a href="https://github.com/ShadowPlague21/gemini-canvas-proxy" target="_blank">gemini-canvas-proxy</a> · postMessage bridge · no WebSocket · no LNA issues
+        </div>
+    </div>
 
-    // ── Request deduplication ──────────────────────────────────────────
-    // The content script posts to ALL iframes + main window for reliability
-    // (sandbox cross-origin makes iframe targeting unreliable). This means
-    // we may receive the same request multiple times. We track seen IDs and
-    // skip duplicates. Entries expire after 30 seconds.
-    var seenRequests = useRef({});
-    var seenCleanupTimer = useRef(null);
+    <script>
+        // ═══════════════════════════════════════════════════════════════
+        // CANVAS AUTO-INJECT — Canvas replaces the empty string with
+        // the real API key at compile time. DO NOT modify this line.
+        // ═══════════════════════════════════════════════════════════════
+        const apiKey = "";
 
-    // Clean up seen request IDs every 30 seconds
-    useEffect(function() {
-        seenCleanupTimer.current = setInterval(function() {
+        var statusState = 'waiting';
+        var stats = { total: 0, success: 0, errors: 0 };
+        var logsCount = 0;
+        var seenRequests = {};
+
+        // Clean up seen requests every 30 seconds
+        setInterval(function() {
             var now = Date.now();
-            Object.keys(seenRequests.current).forEach(function(key) {
-                if (now - seenRequests.current[key] > 30000) {
-                    delete seenRequests.current[key];
+            Object.keys(seenRequests).forEach(function(key) {
+                if (now - seenRequests[key] > 30000) {
+                    delete seenRequests[key];
                 }
             });
         }, 30000);
-        return function() { clearInterval(seenCleanupTimer.current); };
-    }, []);
 
-    const addLog = useCallback((indicator, text, type) => {
-        type = type || 'info';
-        var time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setLogs(function(prev) {
-            return prev.concat({ time: time, indicator: indicator, text: text, type: type, id: Date.now() + Math.random() }).slice(-150);
-        });
-        if (type === 'success') setStats(function(s) { return { total: s.total + 1, success: s.success + 1, errors: s.errors }; });
-        else if (type === 'error') setStats(function(s) { return { total: s.total + 1, success: s.success, errors: s.errors + 1 }; });
-    }, []);
+        function updateStatus(newStatus) {
+            var bar = document.getElementById('status-bar');
+            var dot = document.getElementById('status-dot');
+            var label = document.getElementById('status-label');
+            var badge = document.getElementById('status-badge');
+            
+            statusState = newStatus;
+            bar.className = 'status-bar ' + newStatus;
+            dot.className = 'status-dot ' + newStatus;
+            
+            if (newStatus === 'waiting') {
+                label.innerText = 'Connecting...';
+                badge.innerText = 'WAITING';
+                badge.className = 'status-badge inactive';
+            } else if (newStatus === 'online') {
+                label.innerText = 'Proxy Active';
+                badge.innerText = 'LIVE';
+                badge.className = 'status-badge active';
+            } else {
+                label.innerText = 'Disconnected';
+                badge.innerText = 'OFFLINE';
+                badge.className = 'status-badge inactive';
+            }
+        }
 
-    useEffect(function() {
-        if (logEndRef.current) logEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }, [logs]);
+        function addLog(indicator, text, type) {
+            type = type || 'info';
+            var container = document.getElementById('log-container');
+            var emptyState = document.getElementById('empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+            
+            var time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            var logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.innerHTML = `
+                <span class="log-time">${time}</span>
+                <span class="log-indicator ${indicator}"></span>
+                <span class="log-text ${type}">${text}</span>
+            `;
+            container.appendChild(logEntry);
+            logsCount++;
+            document.getElementById('log-header-count').innerText = logsCount + ' entries';
+            
+            // Auto scroll to bottom
+            container.scrollTop = container.scrollHeight;
+            
+            // Stats handling
+            if (type === 'success') {
+                stats.total++;
+                stats.success++;
+            } else if (type === 'error') {
+                stats.total++;
+                stats.errors++;
+            }
+            document.getElementById('stat-total').innerText = stats.total;
+            document.getElementById('stat-success').innerText = stats.success;
+            document.getElementById('stat-errors').innerText = stats.errors;
+        }
 
-    useEffect(function() {
-        var timer = setTimeout(function() {
+        // Ready trigger
+        setTimeout(function() {
             window.parent.postMessage({ source: 'gemini-proxy-ready' }, '*');
-            setStatus('online');
+            updateStatus('online');
             addLog('info', 'Proxy ready — waiting for requests', 'info');
         }, 500);
-        return function() { clearTimeout(timer); };
-    }, [addLog]);
 
-    useEffect(function() {
-        function handleMessage(event) {
+        window.addEventListener('message', function(event) {
             var data = event.data;
             if (!data || data.source !== 'gemini-proxy-request') return;
 
             var id = data.id;
-
-            // ── Deduplicate: skip if we've already seen this request ID ──
-            // The content script posts to all iframes + main window, so we
-            // receive the same request multiple times. Only process the first.
-            if (seenRequests.current[id]) return;
-            seenRequests.current[id] = Date.now();
+            if (seenRequests[id]) return;
+            seenRequests[id] = Date.now();
 
             var method = data.method || 'POST';
             var path = data.path;
             var body = data.body;
             var headers = data.headers;
+            
             addLog('request', method + ' ' + path.replace('/v1beta/models/', '').replace(':generateContent', ''));
 
             var url = 'https://generativelanguage.googleapis.com' + path;
@@ -427,84 +497,7 @@ function App() {
                 addLog('error', err.message, 'error');
                 window.parent.postMessage({ source: 'gemini-proxy-response', id: id, error: err.message }, '*');
             });
-        }
-
-        window.addEventListener('message', handleMessage);
-        return function() { window.removeEventListener('message', handleMessage); };
-    }, [addLog]);
-
-    var sc = {
-        waiting: { label: 'Connecting...', badge: 'WAITING', badgeClass: 'inactive' },
-        online: { label: 'Proxy Active', badge: 'LIVE', badgeClass: 'active' },
-        offline: { label: 'Disconnected', badge: 'OFFLINE', badgeClass: 'inactive' }
-    }[status];
-
-    return html`
-        <div className="app">
-            <div className="header">
-                <div className="header-row">
-                    <div className="header-icon">⚡</div>
-                    <h1>Gemini Canvas Proxy</h1>
-                </div>
-                <p>Free unlimited Gemini API via Canvas postMessage bridge</p>
-            </div>
-
-            <div className=${'status-bar ' + status}>
-                <div className=${'status-dot ' + status}></div>
-                <span className="status-label">${sc.label}</span>
-                <span className=${'status-badge ' + sc.badgeClass}>${sc.badge}</span>
-            </div>
-
-            <div className="stats-row">
-                <div className="stat-card">
-                    <div className="stat-value default">${stats.total}</div>
-                    <div className="stat-label">Requests</div>
-                </div>
-                <div className="stat-card">
-                    <div className="stat-value success">${stats.success}</div>
-                    <div className="stat-label">Success</div>
-                </div>
-                <div className="stat-card">
-                    <div className="stat-value error">${stats.errors}</div>
-                    <div className="stat-label">Errors</div>
-                </div>
-            </div>
-
-            <div className="log-card">
-                <div className="log-header">
-                    <span className="log-header-title">Activity Log</span>
-                    <span className="log-header-count">${logs.length} entries</span>
-                </div>
-                <div className="log-container">
-                    ${logs.length === 0
-                        ? html`
-                            <div className="empty-state">
-                                <div className="empty-state-icon">📡</div>
-                                <div className="empty-state-text">Waiting for requests</div>
-                                <div className="empty-state-hint">curl http://127.0.0.1:8765/v1/chat/completions</div>
-                            </div>`
-                        : logs.map(function(log) {
-                            return html`
-                                <div key=${log.id} className="log-entry">
-                                    <span className="log-time">${log.time}</span>
-                                    <span className=${'log-indicator ' + log.indicator}></span>
-                                    <span className=${'log-text ' + log.type}>${log.text}</span>
-                                </div>
-                            `;
-                        })
-                    }
-                    <div ref=${logEndRef} />
-                </div>
-            </div>
-
-            <div className="footer">
-                <a href="https://github.com/ShadowPlague21/gemini-canvas-proxy" target="_blank">gemini-canvas-proxy</a> · postMessage bridge · no WebSocket · no LNA issues
-            </div>
-        </div>
-    `;
-}
-
-ReactDOM.createRoot(document.getElementById('root')).render(html`<${App} />`);
-</script>
+        });
+    </script>
 </body>
 </html>

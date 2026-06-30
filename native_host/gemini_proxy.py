@@ -710,7 +710,14 @@ def main():
 
     # Tell the extension we're ready
     try:
-        send_message({"type": "host_ready", "port": port})
+        send_message({
+            "type": "host_ready",
+            "port": port,
+            "config": {
+                "target_chat_id": os.environ.get("TARGET_CHAT_ID", ""),
+                "canvas_card_name": os.environ.get("CANVAS_CARD_NAME", "")
+            }
+        })
     except Exception:
         # stdout pipe broken — extension may have closed
         sys.stderr.write("[Proxy] Failed to send host_ready, staying alive for HTTP\n")

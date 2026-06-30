@@ -1,0 +1,57 @@
+[Unit]
+Description=Gemini Canvas Proxy Container Service
+After=network-online.target proxy-net.network
+Requires=proxy-net.network
+
+[Container]
+ContainerName=gemini-canvas-proxy
+Image=localhost/gemini-canvas-proxy:local
+
+# Network setup: Join proxy-net so Hermes (and other containers) can talk 
+# directly to 'http://gemini-canvas-proxy:8765/v1' without using host ports
+Network=proxy-net
+
+# Publish noVNC UI on all interfaces of PC2
+PublishPort=6080:6080
+
+# Publish Proxy API on all interfaces of PC2 for network-wide access
+PublishPort=8765:8765
+
+# Persistent directories under your Ai folder (keeping home directory clean)
+Volume=%h/Ai/gemini-canvas-proxy/browser-data:/browser-data:Z
+Volume=%h/Ai/gemini-canvas-proxy:/app:ro,Z
+Volume=%h/Ai/gemini-canvas-proxy/machine-id:/etc/machine-id:ro,Z
+Volume=%h/Ai/gemini-canvas-proxy/machine-id:/var/lib/dbus/machine-id:ro,Z
+
+# Environment variables
+Environment=PROXY_BIND=0.0.0.0
+Environment=PROXY_PORT=8765
+Environment=NOVNC_PORT=6080
+Environment=VNC_PORT=5900
+Environment=BROWSER_DATA_DIR=/browser-data
+Environment=CHROMIUM_USER_DATA_DIR=/browser-data/chromium-profile
+Environment=NATIVE_HOST_DIR=/browser-data/chromium-profile/NativeMessagingHosts
+Environment=PYTHONUNBUFFERED=1
+
+# Optional config for auto-loading specific chat and clicking Canvas card
+# Environment=START_PAGE=https://gemini.google.com/app/your-chat-id
+# Environment=TARGET_CHAT_ID=your-chat-id
+# Environment=CANVAS_CARD_NAME=your-canvas-card-name
+
+# Important: Chromium requires a larger /dev/shm to prevent OOM crashes
+PodmanArgs=--shm-size=1g
+AddCapability=CAP_IPC_LOCK
+
+[Service]
+StartLimitIntervalSec=0
+Restart=always
+RestartSec=10
+# Lean configuration: limit CPU and memory usage
+MemoryMax=1024M
+MemoryHigh=900M
+MemorySwapMax=0
+CPUQuota=200%
+CPUWeight=100
+
+[Install]
+WantedBy=default.target

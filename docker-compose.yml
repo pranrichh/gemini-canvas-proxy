@@ -78,6 +78,11 @@ services:
       NATIVE_HOST_DIR: /browser-data/chromium-profile/NativeMessagingHosts
       PYTHONUNBUFFERED: "1"
 
+      # OPTIONAL: Configurations for auto-loading a specific chat and clicking the Canvas card
+      # START_PAGE: "https://gemini.google.com/app/your-chat-id"
+      # TARGET_CHAT_ID: "your-chat-id"
+      # CANVAS_CARD_NAME: "your-canvas-card-name" (e.g. "Task Tracker")
+
     # The full stack needs more than 256 MB of RAM — Chromium alone is
     # ~150 MB resident. Raise to 1 GB hard limit, 512 MB reservation.
     deploy:

@@ -15,3 +15,7 @@ docker-compose.override.yml
 # Host-side shared folder mount target for the shared-folder override.
 # Created on demand by Docker when the bind source doesn't exist.
 browser-data/
+
+# Local/OS-specific batch scripts and debug scratch files
+native_host/*.bat
+debug_output.txt
