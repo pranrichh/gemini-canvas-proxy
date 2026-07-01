@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>a quick and convenient canvas proxy alternative by I am canceled</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lucide/0.263.0/lucide.min.js"></script>
+    <!-- JSZip for Extension Generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #09090b;
+            color: #f4f4f5;
+        }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #18181b; }
+        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+        .scroll-hide::-webkit-scrollbar { width: 3px; height: 3px; }
+        .accordion-content { transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease; }
+        
+        /* Loading Dots Animation */
+        .dot-flashing {
+            position: relative;
+            width: 6px;
+            height: 6px;
+            border-radius: 5px;
+            background-color: #a1a1aa;
+            color: #a1a1aa;
+            animation: dot-flashing 1s infinite linear alternate;
+            animation-delay: 0.5s;
+        }
+        .dot-flashing::before, .dot-flashing::after {
+            content: '';
+            display: inline-block;
+            position: absolute;
+            top: 0;
+        }
+        .dot-flashing::before {
+            left: -10px;
+            width: 6px;
+            height: 6px;
+            border-radius: 5px;
+            background-color: #a1a1aa;
+            color: #a1a1aa;
+            animation: dot-flashing 1s infinite alternate;
+            animation-delay: 0s;
+        }
+        .dot-flashing::after {
+            left: 10px;
+            width: 6px;
+            height: 6px;
+            border-radius: 5px;
+            background-color: #a1a1aa;
+            color: #a1a1aa;
+            animation: dot-flashing 1s infinite alternate;
+            animation-delay: 1s;
+        }
+        @keyframes dot-flashing {
+            0% { background-color: #a1a1aa; }
+            50%, 100% { background-color: transparent; }
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col bg-[#09090b]">
+
+    <!-- Top Navigation Header -->
+    <header class="h-16 border-b border-zinc-800 flex items-center justify-between px-6 bg-[#09090b]/80 backdrop-blur-md z-40 shrink-0 sticky top-0">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20">
+                <i data-lucide="shuffle" class="w-5 h-5 text-white"></i>
+            </div>
+            <div>
+                <span class="font-bold tracking-tight text-sm md:text-base">I am canceled PRESENTS</span>
+                <span class="ml-2 text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded font-mono hidden sm:inline-block">a pointless alternative proxy for quick deployment</span>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-6">
+            <div class="flex flex-col items-end mr-2">
+                <span class="text-[9px] text-zinc-500 font-bold uppercase tracking-widest hidden sm:block">Active Edge Host</span>
+                <div class="flex gap-2 items-center">
+                    <span id="header-status-dot" class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                    <span id="header-status-text" class="text-xs text-zinc-300 mono">Disconnected</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace Dashboard Grid -->
+    <main class="flex-1 flex flex-col lg:flex-row w-full max-w-[100vw]">
+        
+        <!-- Left Column: Control Panel with Accordions -->
+        <section class="w-full lg:w-[450px] lg:h-[calc(100vh-64px)] border-r border-zinc-800 bg-[#111114] flex flex-col shrink-0 overflow-y-auto">
+            <div class="p-4 space-y-4">
+                
+                <!-- Section 1a: Google Colab Setup Guide (NEW & HIGHLY RECOMMENDED) -->
+                <div class="border border-indigo-500/40 bg-indigo-950/10 rounded-xl overflow-hidden shadow-lg shadow-indigo-950/20">
+                    <button onclick="toggleAccordion('colab-accordion')" class="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-indigo-500/5 transition-all">
+                        <div class="flex items-center gap-3">
+                            <i data-lucide="play-circle" class="w-4 h-4 text-indigo-400"></i>
+                            <span class="text-xs font-black uppercase tracking-widest text-indigo-300">1a. Google Colab (Recommended)</span>
+                        </div>
+                        <i id="colab-accordion-arrow" data-lucide="chevron-down" class="w-4 h-4 text-zinc-500 transition-transform duration-300 rotate-180"></i>
+                    </button>
+                    
+                    <div id="colab-accordion-content" class="accordion-content border-t border-zinc-800/80 px-5 py-4 space-y-4 text-xs text-zinc-400">
+                        <div class="space-y-2">
+                            <p class="leading-relaxed text-zinc-300">Run a unified single-process bridge directly inside <a href="https://colab.research.google.com" target="_blank" class="text-indigo-400 hover:underline inline-flex items-center gap-0.5">Google Colab<i data-lucide="external-link" class="w-3 h-3"></i></a>. This combines websocket and HTTP traffic into memory and bypasses isolate splits.</p>
+                            <ol class="list-decimal list-inside space-y-1.5 pl-1 font-medium text-zinc-400">
+                                <li>Open a new empty notebook on <a href="https://colab.research.google.com" target="_blank" class="text-indigo-400 underline font-bold">Google Colab</a>.</li>
+                                <li>Paste the Python block below into a code cell and hit **Run**.</li>
+                                <li>Copy the generated **`.trycloudflare.com`** URL printed at the bottom.</li>
+                                <li>Paste that link in Step 3 below and connect!</li>
+                            </ol>
+                        </div>
+                        <div class="relative bg-zinc-950 rounded-xl border border-zinc-800 p-4">
+                            <div class="flex justify-between items-center mb-2 pb-2 border-b border-zinc-800/60">
+                                <span class="text-[9px] font-mono text-zinc-500">colab_relay.py</span>
+                                <button onclick="copyColabCode()" class="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded border border-zinc-800 text-[10px] font-bold transition-all flex items-center gap-1.5 active:scale-[0.97]">
+                                    <i data-lucide="copy" class="w-3 h-3"></i> Copy
+                                </button>
+                            </div>
+                            <pre id="colab-code-text" class="text-[10px] font-mono leading-relaxed overflow-x-auto max-h-40 text-zinc-400 scroll-hide select-all whitespace-pre"># 1. Force kill existing processes to resolve "Text file busy"
+!pkill -9 -f cloudflared
+!pkill -9 -f uvicorn
+
+# 2. Install FastAPI, Uvicorn, and Websockets
+!pip install -q fastapi uvicorn websockets
+
+# 3. Download Cloudflare tunnel binary to expose the environment
+!wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
+!chmod +x cloudflared
+
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+import json
+import subprocess
+import time
+import re
+import threading
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+canvas_socket = None
+pending_requests = {}
+req_id = 0
+
+@app.get("/")
+async def root():
+    return {"status": "Google Colab Serverless Bridge Active"}
+
+@app.websocket("/")
+async def websocket_endpoint(websocket: WebSocket):
+    global canvas_socket
+    await websocket.accept()
+    canvas_socket = websocket
+    print("🚀 Browser extension connected via WebSocket!")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                msg_id = msg.get("id")
+                body = msg.get("body")
+                if msg_id in pending_requests:
+                    pending_requests[msg_id].set_result(body)
+            except Exception:
+                pass
+    except WebSocketDisconnect:
+        print("🔌 Browser extension disconnected.")
+        if canvas_socket == websocket:
+            canvas_socket = None
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    global canvas_socket, req_id
+    if not canvas_socket:
+        return Response(content=json.dumps({"error": "Canvas app offline"}), status_code=503, media_type="application/json")
+
+    body = await request.json()
+    req_id += 1
+    current_id = req_id
+
+    loop = asyncio.get_event_loop()
+    future = loop.create_future()
+    pending_requests[current_id] = future
+
+    print(f"📥 Received prompt. Forwarding to Browser Tunnel (ID: {current_id})...")
+    await canvas_socket.send_text(json.dumps({"id": current_id, "body": body}))
+
+    try:
+        response_body = await asyncio.wait_for(future, timeout=30.0)
+        return response_body
+    except asyncio.TimeoutError:
+        return Response(content=json.dumps({"error": "Request timed out"}), status_code=504, media_type="application/json")
+    finally:
+        if current_id in pending_requests:
+            del pending_requests[current_id]
+
+# Start Cloudflared tunnel in the background to get public URL
+print("\n🔥 Starting secure cloud tunnel...")
+tunnel_process = subprocess.Popen(
+    ["./cloudflared", "tunnel", "--url", "http://localhost:8000"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True
+)
+
+# Parse output to find the trycloudflare URL
+tunnel_url = None
+time.sleep(3) # Wait for tunnel initialization
+for _ in range(30):
+    line = tunnel_process.stdout.readline()
+    match = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", line)
+    if match:
+        tunnel_url = match.group(0)
+        break
+    time.sleep(0.2)
+
+if tunnel_url:
+    print("=" * 60)
+    print("🎉 PORT FORWARDING COMPLETED!")
+    print(f"Your Public Bridge URL: {tunnel_url.replace('https://', '')}")
+    print("Paste the URL above directly into Step 3 of your Canvas interface.")
+    print("=" * 60)
+else:
+    print("❌ Failed to resolve Cloudflare tunnel link automatically. Check cell output logs.")
+
+# Run FastAPI server in a background thread to prevent blocking Colab's Jupyter event loop
+print("🚀 Starting FastAPI Server in isolated thread...")
+config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
+server = uvicorn.Server(config=config)
+
+server_thread = threading.Thread(target=server.run, daemon=True)
+server_thread.start()
+
+# Keep cell alive and print success
+while not server.started:
+    time.sleep(0.1)
+
+print("⚡ Isolated background server is online! Safe to keep working.")</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 1b: Local Node.js/Bun Server Setup Guide -->
+                <div class="border border-zinc-800 bg-[#18181b]/50 rounded-xl overflow-hidden">
+                    <button onclick="toggleAccordion('local-accordion')" class="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-zinc-800/20 transition-all">
+                        <div class="flex items-center gap-3">
+                            <i data-lucide="terminal" class="w-4 h-4 text-cyan-400"></i>
+                            <span class="text-xs font-black uppercase tracking-widest text-zinc-300">1b. Local Server Setup (Offline)</span>
+                        </div>
+                        <i id="local-accordion-arrow" data-lucide="chevron-down" class="w-4 h-4 text-zinc-500 transition-transform duration-300"></i>
+                    </button>
+                    
+                    <div id="local-accordion-content" class="accordion-content border-t border-zinc-800/80 px-5 py-4 space-y-4 text-xs text-zinc-400 hidden">
+                        <div class="space-y-2">
+                            <p class="leading-relaxed text-zinc-300">Running a local server completely bypasses cloud serverless routing limits. Since there is only one Node process, requests are processed instantly and reliably.</p>
+                            <ol class="list-decimal list-inside space-y-1.5 pl-1 font-medium text-zinc-400">
+                                <li>Create a new directory locally and run <code class="text-zinc-300 bg-zinc-800 px-1 rounded">npm init -y && npm install ws</code>.</li>
+                                <li>Create a file named <code class="text-zinc-300 bg-zinc-800 px-1 rounded">server.js</code> and paste the script below.</li>
+                                <li>Launch the server using <code class="text-zinc-300 bg-zinc-800 px-1 rounded">node server.js</code>.</li>
+                                <li>In Step 3 below, enter <code class="text-zinc-300 bg-zinc-800 px-1 rounded">localhost:3000</code> as your bridge link.</li>
+                            </ol>
+                        </div>
+                        <div class="relative bg-zinc-950 rounded-xl border border-zinc-800 p-4">
+                            <div class="flex justify-between items-center mb-2 pb-2 border-b border-zinc-800/60">
+                                <span class="text-[9px] font-mono text-zinc-500">server.js (Node.js)</span>
+                                <button onclick="copyLocalServerCode()" class="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded border border-zinc-800 text-[10px] font-bold transition-all flex items-center gap-1.5 active:scale-[0.97]">
+                                    <i data-lucide="copy" class="w-3 h-3"></i> Copy
+                                </button>
+                            </div>
+                            <pre id="local-server-code-text" class="text-[10px] font-mono leading-relaxed overflow-x-auto max-h-36 text-zinc-400 scroll-hide select-all whitespace-pre">const http = require('http');
+const { WebSocketServer } = require('ws');
+
+const PORT = process.env.PORT || 3000;
+let canvasSocket = null;
+const pendingRequests = new Map();
+let reqId = 0;
+
+const server = http.createServer(async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  if (req.method === 'POST' && req.url.endsWith('/v1/chat/completions')) {
+    if (!canvasSocket) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Canvas app offline" }));
+      return;
+    }
+
+    let bodyStr = '';
+    req.on('data', chunk => { bodyStr += chunk; });
+    req.on('end', async () => {
+      try {
+        const body = JSON.parse(bodyStr);
+        const id = ++reqId;
+        canvasSocket.send(JSON.stringify({ id, body }));
+
+        const responseBody = await new Promise((resolve) => {
+          pendingRequests.set(id, { resolve });
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(responseBody));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Invalid JSON or payload" }));
+      }
+    });
+    return;
+  }
+
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Local Edge Bridge Active.');
+});
+
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
+});
+
+wss.on('connection', (ws) => {
+  canvasSocket = ws;
+  ws.on('message', (message) => {
+    try {
+      const { id, body } = JSON.parse(message);
+      if (pendingRequests.has(id)) {
+        pendingRequests.get(id).resolve(body);
+        pendingRequests.delete(id);
+      }
+    } catch (e) {}
+  });
+
+  ws.on('close', () => {
+    if (canvasSocket === ws) canvasSocket = null;
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`🚀 Bridge running at http://localhost:${PORT}`);
+});</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 1c: Cloudflare Workers Setup Guide -->
+                <div class="border border-zinc-800 bg-[#18181b]/50 rounded-xl overflow-hidden">
+                    <button onclick="toggleAccordion('worker-accordion')" class="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-zinc-800/20 transition-all">
+                        <div class="flex items-center gap-3">
+                            <i data-lucide="server-cog" class="w-4 h-4 text-emerald-400"></i>
+                            <span class="text-xs font-black uppercase tracking-widest text-zinc-300">1c. Cloudflare Worker Setup</span>
+                        </div>
+                        <i id="worker-accordion-arrow" data-lucide="chevron-down" class="w-4 h-4 text-zinc-500 transition-transform duration-300"></i>
+                    </button>
+                    
+                    <div id="worker-accordion-content" class="accordion-content border-t border-zinc-800/80 px-5 py-4 space-y-4 text-xs text-zinc-400 hidden">
+                        <div class="space-y-2">
+                            <p class="leading-relaxed text-zinc-300">Deploy the HTTP-to-WebSocket edge adapter to <a href="https://workers.cloudflare.com/" target="_blank" class="text-blue-400 hover:underline inline-flex items-center gap-0.5">Cloudflare Workers<i data-lucide="external-link" class="w-3 h-3"></i></a> to provide a public URL for your app to hit.</p>
+                            <ol class="list-decimal list-inside space-y-1.5 pl-1 font-medium text-zinc-400">
+                                <li>Log in to Cloudflare and go to <strong>Workers & Pages</strong> > <strong>Create application</strong>.</li>
+                                <li>Click <strong>Create Worker</strong>, name it, and hit <strong>Deploy</strong>.</li>
+                                <li>Click <strong>Edit code</strong>, clear the default editor text, and paste the code below.</li>
+                                <li>Click <strong>Save and deploy</strong> in the top right.</li>
+                                <li>Copy the assigned <code class="text-zinc-300 bg-zinc-800 px-1 rounded">.workers.dev</code> URL to use in Step 3.</li>
+                            </ol>
+                        </div>
+                        <div class="relative bg-zinc-950 rounded-xl border border-zinc-800 p-4">
+                            <div class="flex justify-between items-center mb-2 pb-2 border-b border-zinc-800/60">
+                                <span class="text-[9px] font-mono text-zinc-500">worker.js</span>
+                                <button onclick="copyWorkerCode()" class="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded border border-zinc-800 text-[10px] font-bold transition-all flex items-center gap-1.5 active:scale-[0.97]">
+                                    <i data-lucide="copy" class="w-3 h-3"></i> Copy
+                                </button>
+                            </div>
+                            <pre id="worker-code-text" class="text-[10px] font-mono leading-relaxed overflow-x-auto max-h-32 text-zinc-400 scroll-hide select-all whitespace-pre">let canvasSocket = null;
+const pendingRequests = new Map();
+let reqId = 0;
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization"
+};
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders });
+    }
+
+    const upgradeHeader = request.headers.get("Upgrade");
+    if (upgradeHeader && upgradeHeader.toLowerCase() === "websocket") {
+      const pair = new WebSocketPair();
+      const client = pair[0];
+      const server = pair[1];
+      
+      server.accept();
+      canvasSocket = server;
+      
+      server.addEventListener("message", (event) => {
+        try {
+          const { id, body } = JSON.parse(event.data);
+          if (pendingRequests.has(id)) {
+            pendingRequests.get(id).resolve(body);
+            pendingRequests.delete(id);
+          }
+        } catch (e) {}
+      });
+      
+      server.addEventListener("close", () => {
+        if (canvasSocket === server) canvasSocket = null;
+      });
+
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
+    if (request.method === "POST" && url.pathname.endsWith("/v1/chat/completions")) {
+      if (!canvasSocket) return new Response(JSON.stringify({error: "Canvas app offline"}), {status: 503, headers: corsHeaders});
+      
+      const id = ++reqId;
+      const body = await request.json();
+      canvasSocket.send(JSON.stringify({ id, body }));
+      
+      const responseBody = await new Promise((resolve) => pendingRequests.set(id, { resolve }));
+      return new Response(JSON.stringify(responseBody), { headers: { "Content-Type": "application/json", ...corsHeaders } });
+    }
+    return new Response("Cloudflare Edge bridge active.", { headers: corsHeaders });
+  }
+};</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 2: Browser Extension Bridge Generator -->
+                <div class="border border-zinc-800 bg-[#18181b]/50 rounded-xl overflow-hidden">
+                    <button onclick="toggleAccordion('ext-accordion')" class="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-zinc-800/20 transition-all">
+                        <div class="flex items-center gap-3">
+                            <i data-lucide="blocks" class="w-4 h-4 text-orange-400"></i>
+                            <span class="text-xs font-black uppercase tracking-widest text-zinc-300">2. Extension Proxy Setup</span>
+                        </div>
+                        <i id="ext-accordion-arrow" data-lucide="chevron-down" class="w-4 h-4 text-zinc-500 transition-transform duration-300"></i>
+                    </button>
+                    
+                    <div id="ext-accordion-content" class="accordion-content border-t border-zinc-800/80 px-5 py-4 space-y-4 text-xs text-zinc-400 hidden">
+                        <p class="leading-relaxed text-[11px]">Because Canvas runs in a strict sandboxed iframe, direct WebSockets are blocked. This extension proxies messages out of the sandbox and establishes the connection on your behalf.</p>
+                        <button onclick="downloadExtensionZip()" class="w-full bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 border border-orange-500/30 font-bold py-3 px-4 rounded-xl text-xs transition-all shadow-lg active:scale-[0.98] flex items-center justify-center gap-2">
+                            <i data-lucide="download-cloud" class="w-4 h-4"></i>
+                            <span>Download Extension ZIP</span>
+                        </button>
+                        <p class="text-[9px] text-zinc-500 text-center italic mt-1">Unzip and load unpacked in chrome://extensions</p>
+                    </div>
+                </div>
+
+                <!-- Section 3: Security & Credentials -->
+                <div class="border border-zinc-800 bg-[#18181b]/50 rounded-xl overflow-hidden">
+                    <button onclick="toggleAccordion('credentials-accordion')" class="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-zinc-800/20 transition-all">
+                        <div class="flex items-center gap-3">
+                            <i data-lucide="key" class="w-4 h-4 text-indigo-400"></i>
+                            <span class="text-xs font-black uppercase tracking-widest text-zinc-300">3. Bridge Connection</span>
+                        </div>
+                        <i id="credentials-accordion-arrow" data-lucide="chevron-down" class="w-4 h-4 text-zinc-500 transition-transform duration-300 rotate-180"></i>
+                    </button>
+                    
+                    <div id="credentials-accordion-content" class="accordion-content border-t border-zinc-800/80 px-5 py-4 space-y-4">
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-bold text-zinc-500 uppercase">Gemini API Key</label>
+                            <div class="relative">
+                                <input id="api-key" type="password" placeholder="Using environment-provided key..." 
+                                       class="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-mono text-zinc-200 font-medium">
+                                <button onclick="toggleKeyVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300">
+                                    <i id="eye-icon" data-lucide="eye" class="w-4 h-4"></i>
+                                </button>
+                            </div>
+                            <p class="text-[10px] text-zinc-500 leading-normal font-sans">Leave blank to automatically fallback to the platform's sandbox API key.</p>
+                        </div>
+
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-bold text-zinc-500 uppercase">Relay Endpoint URL (No ws/wss prefix)</label>
+                            <input id="edge-url" type="text" placeholder="e.g. localhost:3000 or your-tunnel.trycloudflare.com" value=""
+                                   class="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-mono text-zinc-200 font-bold">
+                        </div>
+
+                        <button id="connect-btn" onclick="bridge.toggleConnection()" 
+                                class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-4 rounded-xl text-sm transition-all shadow-lg shadow-indigo-500/10 hover:shadow-indigo-500/20 active:scale-[0.98] flex items-center justify-center gap-2">
+                            <i data-lucide="power" class="w-4 h-4"></i>
+                            <span>Establish Edge Tunnel</span>
+                        </button>
+
+                        <!-- Dynamic Public Endpoint Display -->
+                        <div id="active-endpoint-container" class="hidden mt-3 p-3 bg-emerald-950/20 border border-emerald-900/50 rounded-xl space-y-2 transition-all">
+                            <label class="text-[9px] font-bold text-emerald-500 uppercase tracking-wider">OpenAI API Endpoint Link</label>
+                            <div class="flex items-center gap-2">
+                                <input id="endpoint-url-display" type="text" readonly
+                                       class="w-full bg-zinc-950 border border-zinc-800 rounded border-none px-3 py-2 text-xs outline-none font-mono text-zinc-300 select-all focus:ring-1 focus:ring-emerald-500/30">
+                                <button onclick="copyEndpointUrl()" class="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition-all active:scale-95 flex-shrink-0" title="Copy to clipboard">
+                                    <i data-lucide="copy" class="w-4 h-4"></i>
+                                </button>
+                            </div>
+                            <p class="text-[9px] text-zinc-500 leading-normal">Paste this full URL into your app or any OpenAI-compatible client.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 4: Diagnostics Panel -->
+                <div class="p-4 bg-zinc-900/50 border border-zinc-800 rounded-xl space-y-3 text-xs">
+                    <button onclick="chatUI.openChat()" class="w-full bg-zinc-850 hover:bg-zinc-800 text-zinc-300 font-bold py-2.5 px-4 rounded-xl text-xs transition-all active:scale-[0.98] flex items-center justify-center gap-2">
+                        <i data-lucide="message-square" class="w-3.5 h-3.5 text-indigo-400"></i>
+                        <span>Launch Diagnostic Chat Window</span>
+                    </button>
+                    <p class="text-[10px] text-zinc-500 text-center leading-normal">Perform true end-to-end HTTP tests against your tunnel's `/v1/chat/completions` route.</p>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Right Column: Real-time Telemetry logs -->
+        <section class="flex-1 flex flex-col bg-[#050506] border-t lg:border-t-0 border-zinc-800 lg:h-[calc(100vh-64px)] overflow-hidden min-h-[500px]">
+            <div class="h-12 border-b border-zinc-800 flex items-center justify-between px-4 lg:px-6 bg-[#09090b]/40 shrink-0">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="activity" class="w-4 h-4 text-indigo-400 animate-pulse"></i>
+                    <span class="text-xs font-black uppercase tracking-widest text-zinc-400 truncate">Duplex Telemetry Stream</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="bridge.clearLogs()" class="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white transition-colors flex items-center gap-1.5 text-xs">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> <span class="hidden sm:inline">Clear logs</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Terminal Stream Container -->
+            <div id="telemetry-output" class="flex-1 p-4 lg:p-6 overflow-y-auto space-y-4 scroll-hide text-zinc-200 font-mono">
+                <div id="empty-state" class="flex flex-col items-center justify-center h-full text-center opacity-40 font-sans">
+                    <i data-lucide="network" class="w-12 h-12 text-zinc-500 mb-3 animate-pulse"></i>
+                    <p class="text-sm">Extension routing adapter active. Awaiting traffic...</p>
+                    <p class="text-xs text-zinc-600 mt-1 max-w-sm">Simulated requests or inbound edge traffic will map in real time here.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Chat Modal Overlay (New Window Simulator) -->
+    <div id="chat-modal" class="fixed inset-0 z-50 hidden bg-[#00000099] backdrop-blur-sm flex items-center justify-center p-4 sm:p-6 transition-opacity">
+        <div class="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-2xl h-[80vh] max-h-[700px] flex flex-col shadow-2xl flex-shrink-0 overflow-hidden transform transition-transform">
+            
+            <!-- Chat Header -->
+            <div class="h-14 border-b border-zinc-800 flex items-center justify-between px-5 bg-zinc-950 shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded bg-indigo-500/20 flex items-center justify-center border border-indigo-500/30">
+                        <i data-lucide="bot" class="w-4 h-4 text-indigo-400"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-zinc-200">Live Endpoint Chat Sandbox</h3>
+                        <p class="text-[10px] text-zinc-500 font-mono">Real POST /v1/chat/completions Client</p>
+                    </div>
+                </div>
+                <button onclick="chatUI.closeChat()" class="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Chat Messages Area -->
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-5 space-y-4 bg-zinc-900 scroll-hide">
+                <!-- Messages injected here -->
+            </div>
+
+            <!-- Chat Input Area -->
+            <div class="p-4 border-t border-zinc-800 bg-zinc-950 shrink-0">
+                <form id="chat-form" onsubmit="chatUI.submitMessage(event)" class="relative flex items-center">
+                    <input type="text" id="chat-input" placeholder="Test the native OpenAI format..." autocomplete="off"
+                           class="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-4 pr-12 py-3.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all text-zinc-200">
+                    <button type="submit" class="absolute right-2 p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors shadow-lg active:scale-95 disabled:opacity-50 disabled:pointer-events-none" id="chat-send-btn">
+                        <i data-lucide="send" class="w-4 h-4"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="fixed bottom-6 left-6 z-50 flex flex-col gap-2"></div>
+
+    <script>
+        // Canvas injects the platform API key into this variable at runtime
+        const apiKey = "";
+
+        // ------------------------------------------------------------------
+        // CSP-Safe Icon Renderer
+        // ------------------------------------------------------------------
+        const renderIcons = () => {
+            if (window.lucide && typeof window.lucide.createIcons === 'function') {
+                try { window.lucide.createIcons(); } catch (e) {}
+            }
+        };
+
+        // ------------------------------------------------------------------
+        // UI Helpers & Clipboard
+        // ------------------------------------------------------------------
+        function copyTextSecurely(text, successMessage) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    bridge.showToast(successMessage, "success");
+                } else {
+                    bridge.showToast("Unable to copy automatically. Select text manually.", "error");
+                }
+            } catch (err) {
+                bridge.showToast("Copy blocked by browser. Highlight and copy manually.", "error");
+            }
+            document.body.removeChild(textarea);
+        }
+
+        function copyColabCode() {
+            const code = document.getElementById('colab-code-text').textContent;
+            copyTextSecurely(code, "Google Colab Python script copied to clipboard!");
+        }
+
+        function copyWorkerCode() {
+            const code = document.getElementById('worker-code-text').textContent;
+            copyTextSecurely(code, "Cloudflare Worker script copied to clipboard!");
+        }
+
+        function copyLocalServerCode() {
+            const code = document.getElementById('local-server-code-text').textContent;
+            copyTextSecurely(code, "Local Node.js server script copied to clipboard!");
+        }
+
+        function copyEndpointUrl() {
+            const url = document.getElementById('endpoint-url-display').value;
+            copyTextSecurely(url, "Endpoint URL copied to clipboard!");
+        }
+
+        function toggleKeyVisibility() {
+            const input = document.getElementById('api-key');
+            const icon = document.getElementById('eye-icon');
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.setAttribute('data-lucide', 'eye-off');
+            } else {
+                input.type = 'password';
+                icon.setAttribute('data-lucide', 'eye');
+            }
+            renderIcons();
+        }
+
+        function toggleAccordion(id) {
+            const content = document.getElementById(id + '-content');
+            const arrow = document.getElementById(id + '-arrow');
+            if (content.classList.contains('hidden')) {
+                content.classList.remove('hidden');
+                arrow.classList.add('rotate-180');
+            } else {
+                content.classList.add('hidden');
+                arrow.classList.remove('rotate-180');
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Chat UI Sandbox Modal Manager (Real HTTP Mode)
+        // ------------------------------------------------------------------
+        const chatUI = {
+            history: [],
+            
+            openChat() {
+                const modal = document.getElementById('chat-modal');
+                modal.classList.remove('hidden');
+                
+                // Initialize conversation if empty
+                if (this.history.length === 0) {
+                    this.history = [{ role: "system", content: "You are a helpful assistant validating the OpenAI proxy endpoint connectivity. Keep responses concise." }];
+                    const messagesContainer = document.getElementById('chat-messages');
+                    messagesContainer.innerHTML = '';
+                    this.appendMessage("assistant", "HTTP Sandbox Initialized. I will send real POST requests to your running bridge to verify connectivity.");
+                }
+                
+                setTimeout(() => document.getElementById('chat-input').focus(), 100);
+            },
+            
+            closeChat() {
+                document.getElementById('chat-modal').classList.add('hidden');
+            },
+            
+            appendMessage(role, text) {
+                const container = document.getElementById('chat-messages');
+                const div = document.createElement('div');
+                div.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'}`;
+                
+                const bubble = document.createElement('div');
+                bubble.className = `p-3.5 rounded-2xl max-w-[85%] text-sm leading-relaxed shadow-sm ${
+                    role === 'user' 
+                        ? 'bg-indigo-600 text-white rounded-tr-sm' 
+                        : 'bg-zinc-800 text-zinc-200 border border-zinc-700 rounded-tl-sm'
+                }`;
+                bubble.textContent = text;
+                
+                div.appendChild(bubble);
+                container.appendChild(div);
+                container.scrollTop = container.scrollHeight;
+            },
+
+            showLoading() {
+                const container = document.getElementById('chat-messages');
+                const div = document.createElement('div');
+                div.id = 'chat-loading-indicator';
+                div.className = `flex justify-start`;
+                div.innerHTML = `<div class="p-4 rounded-2xl bg-zinc-800 border border-zinc-700 rounded-tl-sm text-sm"><div class="dot-flashing ml-3"></div></div>`;
+                container.appendChild(div);
+                container.scrollTop = container.scrollHeight;
+            },
+            
+            hideLoading() {
+                const indicator = document.getElementById('chat-loading-indicator');
+                if (indicator) indicator.remove();
+            },
+            
+            async submitMessage(e) {
+                e.preventDefault();
+                const input = document.getElementById('chat-input');
+                const btn = document.getElementById('chat-send-btn');
+                const text = input.value.trim();
+                
+                if (!text) return;
+                
+                input.value = '';
+                input.disabled = true;
+                btn.disabled = true;
+                
+                this.appendMessage("user", text);
+                this.history.push({ role: "user", content: text });
+                
+                if (!bridge.currentEdgeUrl || !bridge.status.startsWith('Connected')) {
+                    this.appendMessage("assistant", "⚠️ Cannot test endpoint: Tunnel is disconnected. Please Establish the Edge Tunnel first.");
+                    input.disabled = false;
+                    btn.disabled = false;
+                    return;
+                }
+
+                this.showLoading();
+                
+                const payload = {
+                    model: "gemini-2.5-flash",
+                    messages: this.history
+                };
+                
+                // Construct target URL safely
+                const protocol = (bridge.currentEdgeUrl.includes('localhost') || bridge.currentEdgeUrl.includes('127.0.0.1')) ? "http://" : "https://";
+                const targetUrl = `${protocol}${bridge.currentEdgeUrl}/v1/chat/completions`;
+                
+                try {
+                    bridge.logEvent('DIAGNOSTIC_HTTP_REQUEST', { target: targetUrl, payload });
+                    
+                    const response = await fetch(targetUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    const rawResponse = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(rawResponse.error?.message || rawResponse.error || `HTTP ${response.status} Error`);
+                    }
+                    
+                    this.hideLoading();
+                    const reply = rawResponse.choices?.[0]?.message?.content || "No content returned.";
+                    
+                    bridge.logEvent('DIAGNOSTIC_HTTP_RESPONSE', { rawResponse });
+                    this.appendMessage("assistant", reply);
+                    this.history.push({ role: "assistant", content: reply });
+                    
+                } catch (err) {
+                    this.hideLoading();
+                    this.appendMessage("assistant", "⚠️ Endpoint Test Error: " + err.message);
+                    bridge.logEvent('HTTP_EXCEPTION', { error: err.message });
+                } finally {
+                    input.disabled = false;
+                    btn.disabled = false;
+                    input.focus();
+                }
+            }
+        };
+
+        // ------------------------------------------------------------------
+        // JSZip Extension Generation Logic (CSP-Safe)
+        // ------------------------------------------------------------------
+        async function downloadExtensionZip() {
+            try {
+                if (typeof window.JSZip === 'undefined') {
+                    return bridge.showToast("JSZip CDN blocked by Canvas sandbox. Please run the HTML locally to generate the ZIP.", "error");
+                }
+                const zip = new window.JSZip();
+                
+                const manifest = {
+                    "manifest_version": 3,
+                    "name": "Canvas Edge Proxy",
+                    "version": "1.0.2",
+                    "description": "Bypasses sandboxed iframe restrictions to proxy WebSockets for Gemini Canvas",
+                    "permissions": ["scripting"],
+                    "host_permissions": ["<all_urls>"],
+                    "background": { "service_worker": "background.js" },
+                    "content_scripts": [
+                        {
+                            "matches": ["<all_urls>"],
+                            "match_origin_as_fallback": true,
+                            "match_about_blank": true,
+                            "all_frames": true,
+                            "js": ["content.js"],
+                            "run_at": "document_start"
+                        }
+                    ]
+                };
+
+                const contentJs = `
+// Identify our sandbox environment
+if (window.location.origin === "null" || window.name || window.self !== window.top) {
+    window.addEventListener("message", (event) => {
+        if (event.data && event.data.source === 'CANVAS_APP_OUTBOUND') {
+            chrome.runtime.sendMessage({
+                type: 'WS_COMMAND',
+                action: event.data.action,
+                payload: event.data.payload
+            });
+        }
+    });
+
+    chrome.runtime.onMessage.addListener((message) => {
+        if (message.source === 'BACKGROUND_WS_INBOUND') {
+            window.postMessage({
+                source: 'CONTENT_SCRIPT_INBOUND',
+                action: message.action,
+                payload: message.payload
+            }, "*");
+        }
+    });
+}
+`;
+
+                const backgroundJs = `
+let ws = null;
+let heartbeatInterval = null;
+
+function startHeartbeat() {
+    heartbeatInterval = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "ping" }));
+        }
+    }, 20000); 
+}
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'WS_COMMAND') {
+        if (request.action === 'CONNECT') {
+            const edgeUrl = request.payload.url;
+            try {
+                const protocol = (edgeUrl.includes('localhost') || edgeUrl.includes('127.0.0.1')) ? "ws://" : "wss://";
+                ws = new WebSocket(protocol + edgeUrl);
+                
+                ws.onopen = () => {
+                    startHeartbeat();
+                    sendMessageToTabs('WS_STATUS', { status: 'CONNECTED' });
+                };
+                ws.onclose = () => {
+                    clearInterval(heartbeatInterval);
+                    sendMessageToTabs('WS_STATUS', { status: 'DISCONNECTED' });
+                };
+                ws.onerror = () => {
+                    sendMessageToTabs('WS_STATUS', { status: 'ERROR', message: 'WebSocket Error' });
+                };
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    sendMessageToTabs('WS_MESSAGE', data);
+                };
+            } catch(e) {
+                sendMessageToTabs('WS_STATUS', { status: 'ERROR', message: e.message });
+            }
+        }
+        else if (request.action === 'DISCONNECT' && ws) {
+            ws.close();
+        }
+        else if (request.action === 'SEND' && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(request.payload));
+        }
+    }
+});
+
+function sendMessageToTabs(action, payload) {
+    chrome.tabs.query({ url: "*://*.google.com/*" }, (tabs) => {
+        tabs.forEach(tab => {
+            chrome.tabs.sendMessage(tab.id, {
+                source: 'BACKGROUND_WS_INBOUND',
+                action: action,
+                payload: payload
+            }).catch(() => {}); 
+        });
+    });
+}
+`;
+                zip.file("manifest.json", JSON.stringify(manifest, null, 2));
+                zip.file("content.js", contentJs.trim());
+                zip.file("background.js", backgroundJs.trim());
+
+                const blob = await zip.generateAsync({type:"blob"});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "canvas-proxy-extension.zip";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                bridge.showToast("Extension package downloaded successfully!", "success");
+            } catch (err) {
+                bridge.showToast(`Error packing extension: ${err.message}`, "error");
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Bridge Logic Core
+        // ------------------------------------------------------------------
+        const bridge = {
+            status: 'Disconnected',
+            logs: [],
+            messageListenerAdded: false,
+            currentEdgeUrl: '',
+
+            toggleConnection() {
+                let edgeUrl = document.getElementById('edge-url').value.trim();
+                edgeUrl = edgeUrl.replace(/^(wss?:\/\/|https?:\/\/)/i, '').trim();
+                edgeUrl = edgeUrl.replace(/\/+$/, '').trim(); 
+                
+                if (!edgeUrl) {
+                    this.showToast("Please enter a Relay URL", "error");
+                    return;
+                }
+
+                this.currentEdgeUrl = edgeUrl;
+
+                if (this.status.startsWith('Connected')) {
+                    this.disconnect();
+                } else {
+                    this.connect(edgeUrl);
+                }
+            },
+
+            connect(edgeUrl) {
+                this.updateStatus('Connecting via Proxy...', 'yellow');
+                this.logEvent('SYSTEM_CONNECT', `Dispatching CONNECT payload to Extension Content Script...`);
+                
+                window.postMessage({
+                    source: 'CANVAS_APP_OUTBOUND',
+                    action: 'CONNECT',
+                    payload: { url: edgeUrl }
+                }, "*");
+
+                if (!this.messageListenerAdded) {
+                    window.addEventListener('message', async (event) => {
+                        if (event.data?.source !== 'CONTENT_SCRIPT_INBOUND') return;
+                        const { action, payload } = event.data;
+
+                        if (action === 'WS_STATUS') {
+                            if (payload.status === 'CONNECTED') {
+                                this.updateStatus('Connected to Edge', 'green');
+                                this.logEvent('EDGE_CONNECTED', `Relay Link Established via Extension Proxy Sandbox Bypass.`);
+                                this.showToast("Tunnel opened via extension proxy.", "success");
+                                
+                                const endpointContainer = document.getElementById('active-endpoint-container');
+                                const endpointDisplay = document.getElementById('endpoint-url-display');
+                                if (endpointContainer && endpointDisplay) {
+                                    const protocol = (this.currentEdgeUrl.includes('localhost') || this.currentEdgeUrl.includes('127.0.0.1')) ? "http://" : "https://";
+                                    endpointDisplay.value = `${protocol}${this.currentEdgeUrl}/v1/chat/completions`;
+                                    endpointContainer.classList.remove('hidden');
+                                }
+
+                            } else if (payload.status === 'DISCONNECTED') {
+                                this.updateStatus('Disconnected', 'red');
+                                const endpointContainer = document.getElementById('active-endpoint-container');
+                                if (endpointContainer) endpointContainer.classList.add('hidden');
+
+                            } else if (payload.status === 'ERROR') {
+                                this.showToast("Proxy WebSocket connection error.", "error");
+                                this.updateStatus('Disconnected', 'red');
+                                const endpointContainer = document.getElementById('active-endpoint-container');
+                                if (endpointContainer) endpointContainer.classList.add('hidden');
+                            }
+                        }
+                        
+                        else if (action === 'WS_MESSAGE') {
+                            if (payload.type === 'ping') return;
+                            const { id, body } = payload;
+                            this.logEvent('INBOUND_TRAFFIC', { source: "Your App", body });
+
+                            try {
+                                const apiKeyInput = document.getElementById('api-key').value.trim();
+                                const activeKey = apiKeyInput || (typeof apiKey !== 'undefined' ? apiKey : "");
+                                
+                                const result = await this.queryGemini(activeKey, body);
+                                this.logEvent('OUTBOUND_API_RESPONSE', { target: "Edge Relay", result });
+
+                                window.postMessage({
+                                    source: 'CANVAS_APP_OUTBOUND',
+                                    action: 'SEND',
+                                    payload: { id, body: result }
+                                }, "*");
+                                
+                            } catch (err) {
+                                this.logEvent('BRIDGE_ERROR', { error: err.message });
+                                window.postMessage({
+                                    source: 'CANVAS_APP_OUTBOUND',
+                                    action: 'SEND',
+                                    payload: { id, body: { error: err.message } }
+                                }, "*");
+                            }
+                        }
+                    });
+                    this.messageListenerAdded = true;
+                }
+            },
+
+            disconnect() {
+                window.postMessage({
+                    source: 'CANVAS_APP_OUTBOUND',
+                    action: 'DISCONNECT'
+                }, "*");
+                this.updateStatus('Disconnected', 'red');
+                const endpointContainer = document.getElementById('active-endpoint-container');
+                if (endpointContainer) endpointContainer.classList.add('hidden');
+            },
+
+            async fetchWithBackoff(url, options) {
+                const delays = [500, 1500, 3000];
+                let lastError;
+
+                for (let i = 0; i <= delays.length; i++) {
+                    try {
+                        const response = await fetch(url, options);
+                        if (response.ok) return response;
+                        let errMsg = `HTTP Status: ${response.status}`;
+                        try {
+                            const errJson = await response.json();
+                            errMsg = errJson.error?.message || errMsg;
+                        } catch (_) {}
+                        lastError = new Error(errMsg);
+                    } catch (err) {
+                        lastError = err;
+                    }
+                    if (i < delays.length) await new Promise(r => setTimeout(r, delays[i]));
+                }
+                throw lastError;
+            },
+
+            async queryGemini(activeKey, chatBody) {
+                this.logEvent('ADAPTER_ROUTING', { format: "Forwarding Native OpenAI Payload", payload: chatBody });
+
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${activeKey}`;
+
+                // Map OpenAI messages array to Gemini format
+                const geminiContents = (chatBody.messages || []).map(msg => ({
+                    role: msg.role === 'assistant' ? 'model' : 'user',
+                    parts: [{ text: msg.content }]
+                }));
+
+                const response = await this.fetchWithBackoff(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: geminiContents })
+                });
+
+                const rawResponse = await response.json();
+                if (!response.ok) throw new Error(rawResponse.error?.message || "API Execution Failed");
+
+                const text = rawResponse.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                
+                return {
+                    id: "chatcmpl-" + Math.random().toString(36).substr(2, 9),
+                    object: "chat.completion",
+                    created: Math.floor(Date.now() / 1000),
+                    model: chatBody.model || "gemini-2.5-flash",
+                    choices: [{
+                        index: 0,
+                        message: { role: "assistant", content: text },
+                        finish_reason: "stop"
+                    }]
+                };
+            },
+
+            updateStatus(text, color) {
+                const textElem = document.getElementById('header-status-text');
+                const dotElem = document.getElementById('header-status-dot');
+                const connectBtn = document.getElementById('connect-btn');
+
+                if (textElem) textElem.textContent = text;
+                this.status = text;
+                
+                const colors = { red: 'bg-red-500', yellow: 'bg-yellow-500 animate-pulse', green: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]' };
+                if (dotElem) dotElem.className = `w-2 h-2 rounded-full ${colors[color] || 'bg-zinc-500'}`;
+
+                if (connectBtn) {
+                    if (text.startsWith('Connected')) {
+                        connectBtn.className = "w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-4 rounded-xl text-sm transition-all flex items-center justify-center gap-2";
+                        connectBtn.innerHTML = `<i data-lucide="power-off" class="w-4 h-4"></i><span>Sever Edge Tunnel</span>`;
+                    } else {
+                        connectBtn.className = "w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-4 rounded-xl text-sm transition-all flex items-center justify-center gap-2";
+                        connectBtn.innerHTML = `<i data-lucide="power" class="w-4 h-4"></i><span>Establish Edge Tunnel</span>`;
+                    }
+                }
+                renderIcons();
+            },
+
+            logEvent(type, rawData) {
+                const container = document.getElementById('telemetry-output');
+                const emptyState = document.getElementById('empty-state');
+                if (emptyState) emptyState.remove();
+
+                const logCard = document.createElement('div');
+                logCard.className = "mb-4 border-l-2 border-indigo-500 bg-zinc-900/40 p-4 rounded-r-xl border border-zinc-800/80 animate-in fade-in slide-in-from-left-2 duration-300";
+                
+                const outputString = typeof rawData === 'object' ? JSON.stringify(rawData, null, 2) : rawData;
+                const safeOutput = String(outputString).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+                logCard.innerHTML = `
+                    <div class="flex justify-between items-center text-[10px] text-zinc-500 mb-2 font-mono">
+                        <span class="font-bold text-zinc-300">➜ ${type}</span>
+                        <span>${new Date().toLocaleTimeString()}</span>
+                    </div>
+                    <pre class="text-xs text-zinc-300 font-mono overflow-x-auto select-all max-h-60 whitespace-pre-wrap">${safeOutput}</pre>
+                `;
+                if (container) container.prepend(logCard);
+            },
+
+            clearLogs() {
+                const container = document.getElementById('telemetry-output');
+                if (container) {
+                    container.innerHTML = `
+                        <div id="empty-state" class="flex flex-col items-center justify-center h-full text-center opacity-40 font-sans">
+                            <i data-lucide="network" class="w-12 h-12 text-zinc-500 mb-3 animate-pulse"></i>
+                            <p class="text-sm">Extension routing adapter active. Awaiting traffic...</p>
+                            <p class="text-xs text-zinc-600 mt-1">Simulated requests or inbound edge traffic will map in real time here.</p>
+                        </div>
+                    `;
+                }
+                renderIcons();
+            },
+
+            showToast(message, type = "info") {
+                const container = document.getElementById('toast-container');
+                if (!container) return;
+                const toast = document.createElement('div');
+                const styles = { info: 'bg-zinc-900 border-zinc-700 text-zinc-300', success: 'bg-emerald-950 border-emerald-800 text-emerald-400', error: 'bg-red-950 border-red-800 text-red-400' };
+                const icons = { info: 'info', success: 'check-circle-2', error: 'alert-triangle' };
+                
+                toast.className = `flex items-center gap-3 px-4 py-3 rounded-xl border text-xs shadow-xl min-w-80 animate-in slide-in-from-bottom-2 duration-300 ${styles[type]}`;
+                toast.innerHTML = `<i data-lucide="${icons[type]}" class="w-4 h-4 shrink-0"></i><span class="font-medium">${message}</span>`;
+                container.appendChild(toast);
+                renderIcons();
+                setTimeout(() => { toast.classList.add('animate-out', 'fade-out', 'duration-300'); setTimeout(() => toast.remove(), 300); }, 4000);
+            }
+        };
+
+        // Initialize icons on load safely
+        window.onload = () => renderIcons();
+    </script>
+</body>
+</html>
