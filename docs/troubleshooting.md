@@ -154,6 +154,12 @@ Check the browser console in the Canvas iframe (right-click inside the preview â
 Inspect). The page logs the failed `fetch`. The two common causes are an expired
 key (401) and a model that does not support `streamGenerateContent`.
 
+## `400 speech models do not support streaming`
+
+Drop `stream` for `-tts` models. A WAV needs its header before its body, so
+there is nothing to deliver incrementally; the proxy refuses rather than
+returning a stream you cannot play.
+
 ## The container is up but every request 502s
 
 ```bash

@@ -153,6 +153,24 @@ Non-streaming requests take the buffered path and are translated by
 `gemini_to_openai()`. Streaming responses are formatted directly by the host,
 because the pieces already arrive in OpenAI's delta shape.
 
+## Observability
+
+Each hop can only answer for itself, and the failures look alike from outside:
+
+- the relay is gone, so nothing forwards;
+- the page is not running, so nothing answers;
+- the host is gone, so nothing is listening.
+
+`GET /diagnostics` asks the extension and the page directly and returns both
+answers side by side. The extension reports which tab it would route to and
+whether that tab's preview completed the handshake; the page reports whether it
+holds a port, which protocol it speaks, and whether Canvas substituted a key
+into it. A single failed request cannot tell those three apart, and the
+alternative is opening a devtools console inside a sandboxed iframe.
+
+`/health` stays deliberately dull: up, transport, bridge attached. It is what a
+healthcheck polls.
+
 ## Two deployment shapes
 
 **Bare metal.** Chrome launches `gemini_proxy.py` through the manifest. That

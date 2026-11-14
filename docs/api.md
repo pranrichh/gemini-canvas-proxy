@@ -233,8 +233,10 @@ failure. The audio is a complete WAV file, so `base64 -d` it and play it, or
 point an `<audio>` tag at the data URL. The Canvas page does the latter, and
 shows the clip's length.
 
-Speech models do not support streaming: a WAV needs its header before the body,
-so `stream: true` on a `-tts` model returns the whole clip in one event.
+Speech models do not support streaming: a WAV needs its header before its body,
+so there is nothing incremental to send. `stream: true` on a `-tts` model is
+refused with a 400 rather than returning a stream whose payload the caller
+cannot use.
 
 ## Tools
 

@@ -1233,6 +1233,14 @@ class APIHandler(BaseHTTPRequestHandler):
             return
 
         streaming = bool(body.get("stream"))
+        if streaming and TTS_MODEL_PATTERN.search(model):
+            # A WAV needs its header before its body, so there is nothing
+            # incremental to send. Refusing beats returning an SSE stream whose
+            # only payload is unusable, or silently switching the caller to a
+            # shape it did not ask for.
+            self._error(400, "speech models do not support streaming; "
+                             "send the request without stream")
+            return
         request_id = str(uuid.uuid4())
         queue = register_request(request_id)
 
