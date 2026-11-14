@@ -31,9 +31,9 @@ curl -N http://127.0.0.1:8765/v1/chat/completions \
        "messages":[{"role":"user","content":"Count to five"}]}'
 ```
 
-## opencode
+## Opencode
 
-opencode v2 reads `opencode.jsonc` from the project or `~/.config/opencode/`.
+Opencode v2 reads `opencode.jsonc` from the project or `~/.config/opencode/`.
 A custom provider needs a `package`, its `settings`, and the models you want in
 the picker.
 
@@ -61,13 +61,13 @@ the picker.
 
 Then `/models` and pick `gemini-canvas/gemini-3-flash-preview`.
 
-On opencode v1 the same provider is spelled `"provider"` (singular) with `"npm"`
+On Opencode v1 the same provider is spelled `"provider"` (singular) with `"npm"`
 and `"options"` instead of `"package"` and `"settings"`; the endpoint and model
 values are unchanged.
 
-## omp
+## OMP
 
-omp reads `~/.omp/agent/models.yml`. `openai-completions` is the Chat Completions
+OMP reads `~/.omp/agent/models.yml`. `openai-completions` is the Chat Completions
 transport, which is what this proxy speaks.
 
 ```yaml

@@ -33,7 +33,7 @@ Docker: `docker compose up -d --build`, then noVNC at `http://127.0.0.1:6080`.
 ## Features
 
 - Chat completions with tool calling, multimodal input, and image generation
-- Compatible with Hermes Agent, OpenClaw, opencode, omp, the OpenAI SDK, curl
+- Compatible with Hermes Agent, OpenClaw, Opencode, OMP, the OpenAI SDK, curl
 - Bearer auth, loopback-only by default
 - Private MessageChannel bridge — no WebSocket, immune to Chrome's Local Network Access restrictions
 
