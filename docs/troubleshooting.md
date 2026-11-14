@@ -63,12 +63,9 @@ which fails on `<!DOCTYPE html>` with `Expected identifier but found "!"`.
 
 ## The page says Ready but every request reports "not connected"
 
-Two different frames were answering. The content script runs in every frame
-(all_frames), and `chrome.tabs.sendMessage` delivers to all of them — first
-reply wins. Only the top frame answers when it has no relay, and
-accepts the Canvas frame from Google's usercontent origin, which is what a
-sandboxed preview actually reports. If you are seeing this, the extension is
-older than the page: reload it at `chrome://extensions` and reload the tab.
+The page and the extension are from different versions — usually a page pasted
+from a newer copy than the extension that is loaded. Reload the extension at
+`chrome://extensions`, reload the tab, then press Preview again.
 
 ## 401 or 403 from the Gemini API
 
@@ -148,6 +145,10 @@ came back. The tab may be closed, throttled, or the model may be very slow. For
 long generations use `"stream": true`, which applies the timeout between events
 rather than to the whole response, and raise `PROXY_REQUEST_TIMEOUT` if needed.
 
+Image and speech models are not streamed, so they get their own ceiling:
+`PROXY_MEDIA_TIMEOUT` (600 s by default) applies to any model whose name
+contains `image` or `tts`, whatever `PROXY_REQUEST_TIMEOUT` says.
+
 ## Streaming produces nothing, then ends
 
 Check the browser console in the Canvas iframe (right-click inside the preview →
@@ -210,16 +211,6 @@ pgrep -af gemini_proxy
 docker compose logs -f proxy
 docker compose exec proxy tail -n 50 /tmp/chromium.log
 ```
-
-## Tests
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-Stdlib only, no network, no browser. They cover translation, the HTTP surface,
-streaming, error shapes and chunk reassembly; they do not cover anything that
-needs Chrome.
 
 ## Known limits
 
