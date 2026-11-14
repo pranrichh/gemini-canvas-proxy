@@ -356,39 +356,61 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'api_response': {
       // Only the tab we route to may answer, otherwise a stale tab could
       // inject results into someone else's request.
-      if (sender.tab.id !== activeTabId) {
-        sendResponse({ ok: false, reason: 'inactive Gemini tab' });
-        return false;
-      }
-      const delivered = postToHost({
-        type: 'api_response',
-        id: message.id,
-        status: message.status,
-        data: message.data,
-        error: message.error
-      });
-      sendResponse({ ok: delivered });
-      return false;
+      //
+      // `activeTabId` is module state, and Chrome evicts an idle service worker
+      // after ~30 s. A text answer lands well inside that window; an image job
+      // runs for minutes, so by the time it finishes the worker has restarted
+      // with `activeTabId` back at null and the real answer is rejected as
+      // "inactive Gemini tab" — dropped silently, while the host waits out its
+      // full timeout. Restore the tab from storage before judging the sender.
+      getCanvasState()
+        .then(() => {
+          if (sender.tab.id !== activeTabId) {
+            sendResponse({ ok: false, reason: 'inactive Gemini tab' });
+            return;
+          }
+          sendResponse({ ok: postToHost({
+            type: 'api_response',
+            id: message.id,
+            status: message.status,
+            data: message.data,
+            error: message.error
+          }) });
+        })
+        .catch((error) => sendResponse({ ok: false, reason: error.message }));
+      return true;
     }
 
     case 'api_stream_event': {
-      if (sender.tab.id !== activeTabId) {
-        sendResponse({ ok: false, reason: 'inactive Gemini tab' });
-        return false;
+      const forward = () => {
+        if (sender.tab.id !== activeTabId) {
+          sendResponse({ ok: false, reason: 'inactive Gemini tab' });
+          return;
+        }
+        // Forwarded synchronously: ordering between deltas is the whole point
+        // of a stream, and an await here would let them interleave.
+        sendResponse({ ok: postToHost({
+          type: 'api_stream_event',
+          id: message.id,
+          event: message.event,
+          text: message.text,
+          tool_call: message.tool_call,
+          finish_reason: message.finish_reason,
+          usage: message.usage,
+          error: message.error
+        }) });
+      };
+
+      // Same eviction problem as api_response: a long stream can outlive the
+      // worker. Only pay for storage when the id is actually missing, so the
+      // steady state stays synchronous and deltas keep their order.
+      if (activeTabId === null) {
+        getCanvasState()
+          .then(forward)
+          .catch((error) => sendResponse({ ok: false, reason: error.message }));
+        return true;
       }
-      // Forwarded synchronously: ordering between deltas is the whole point
-      // of a stream, and an await here would let them interleave.
-      const delivered = postToHost({
-        type: 'api_stream_event',
-        id: message.id,
-        event: message.event,
-        text: message.text,
-        tool_call: message.tool_call,
-        finish_reason: message.finish_reason,
-        usage: message.usage,
-        error: message.error
-      });
-      sendResponse({ ok: delivered });
+      forward();
       return false;
     }
 
