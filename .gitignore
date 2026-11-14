@@ -17,3 +17,4 @@ docker-compose.override.yml
 # Host-side shared folder mount target for the shared-folder override.
 # Created on demand by Docker when the bind source doesn't exist.
 browser-data/
+native_host/.host_wrapper.sh

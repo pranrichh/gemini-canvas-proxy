@@ -30,12 +30,16 @@ LABEL org.opencontainers.image.licenses="MIT"
 # Avoid interactive prompts from apt during build
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Browser stack. Pinned versions not strictly necessary — the deps below
-# match what `chromium --version` from Debian bookworm pulls in.
+# Browser stack. Debian trixie ships Chromium 156; the explicit library list
+# below covers what the .deb would otherwise pull in as recommendations.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         # Virtual display + window manager
         xvfb \
         openbox \
+        # xdpyinfo lives in x11-utils. x11vnc happens to depend on it today,
+        # but the entrypoint's readiness check must not rely on a transitive
+        # dependency of an optional component.
+        x11-utils \
         # Browser + its runtime deps
         chromium \
         fonts-liberation \
