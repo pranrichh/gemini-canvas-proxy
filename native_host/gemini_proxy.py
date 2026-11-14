@@ -62,6 +62,12 @@ MAX_CHUNKED_REQUEST_BYTES = RAW_CHUNK_BYTES * MAX_CHUNKS
 
 DEFAULT_PORT = 8765
 DEFAULT_REQUEST_TIMEOUT = 180.0
+
+# Media models are not slower to start, they are slower to finish: an image is
+# delivered once, after the whole thing has been drawn. A text-sized ceiling
+# turns every image request into a 504 on a tab that is working fine.
+DEFAULT_MEDIA_TIMEOUT = 600.0
+MEDIA_MODEL_HINTS = ("image", "tts")
 DEFAULT_MAX_REQUEST_BYTES = 32 << 20
 DEFAULT_TOOL_RESULT_CHARS = 5_000
 DEFAULT_MAX_IMAGE_BYTES = 20 << 20
@@ -1352,7 +1358,7 @@ class APIHandler(BaseHTTPRequestHandler):
             outbound_sender(chunk)
 
     def _relay_buffered(self, request_id, queue, model, started):
-        timeout = env_float("PROXY_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT, minimum=1)
+        timeout = self._request_timeout(model)
         try:
             item = queue.get(timeout=timeout)
         except Empty:
@@ -1382,7 +1388,7 @@ class APIHandler(BaseHTTPRequestHandler):
     def _relay_stream(self, request_id, queue, model, body, started):
         include_usage = bool((body.get("stream_options") or {}).get("include_usage"))
         idle_timeout = env_float(
-            "PROXY_STREAM_IDLE_TIMEOUT", DEFAULT_REQUEST_TIMEOUT, minimum=1
+            "PROXY_STREAM_IDLE_TIMEOUT", self._request_timeout(model), minimum=1
         )
         completion_id = "chatcmpl-%s" % uuid.uuid4().hex[:8]
         created = int(time.time())
@@ -1537,6 +1543,22 @@ class APIHandler(BaseHTTPRequestHandler):
                 "url_fetch_enabled": env_flag("PROXY_ALLOW_URL_FETCH"),
             },
         }
+
+    @staticmethod
+    def _model_produces_media(model):
+        """True when the model returns pixels or audio instead of text."""
+        name = (model or "").lower()
+        return any(hint in name for hint in MEDIA_MODEL_HINTS)
+
+    @classmethod
+    def _request_timeout(cls, model):
+        """Ceiling for one request: PROXY_REQUEST_TIMEOUT, raised to
+        PROXY_MEDIA_TIMEOUT for models that produce media."""
+        timeout = env_float("PROXY_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT, minimum=1)
+        if cls._model_produces_media(model):
+            media = env_float("PROXY_MEDIA_TIMEOUT", DEFAULT_MEDIA_TIMEOUT, minimum=1)
+            timeout = max(timeout, media)
+        return timeout
 
     def _timeout_message(self, request_id, timeout):
         snapshot = self._bridge_snapshot()

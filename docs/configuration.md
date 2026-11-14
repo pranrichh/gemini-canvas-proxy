@@ -14,6 +14,7 @@ nothing here that deserves one.
 | `PROXY_SOCKET` | `/tmp/gemini-canvas-proxy.sock` | Unix socket used to split HTTP and stdio roles |
 | `PROXY_REQUEST_TIMEOUT` | `180` | seconds to wait for a non-streaming response, or between stream events |
 | `PROXY_STREAM_IDLE_TIMEOUT` | `PROXY_REQUEST_TIMEOUT` | seconds between stream events before giving up |
+| `PROXY_MEDIA_TIMEOUT` | `600` | floor for image and speech models, which answer only once they are finished |
 | `PROXY_MAX_REQUEST_BYTES` | `33554432` (32 MB) | request body ceiling; also capped at 76.8 MB by the chunk protocol |
 | `PROXY_TOOL_RESULT_MAX_CHARS` | `5000` | characters of a tool result forwarded to the model before truncation |
 | `PROXY_ALLOW_URL_FETCH` | off | allow `http(s)` image URLs; see [security](security.md) |
@@ -22,6 +23,12 @@ nothing here that deserves one.
 | `PROXY_LOG_FILE` | `native_host/.host.log` | where startup, shutdown and fatal errors are recorded |
 
 Notes on the ones people actually change.
+
+**`PROXY_MEDIA_TIMEOUT`.** Image and speech models deliver one finished blob, so
+there is nothing to watch arrive and the text ceiling is the wrong shape for
+them. Any model whose name contains `image` or `tts` gets at least this long,
+regardless of `PROXY_REQUEST_TIMEOUT`. Lower it if you would rather fail fast on
+a stalled image job.
 
 **`PROXY_REQUEST_TIMEOUT`.** The default is generous because a reasoning model
 can legitimately take a while. For streaming, the timeout applies between
