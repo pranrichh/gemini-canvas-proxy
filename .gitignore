@@ -18,3 +18,4 @@ docker-compose.override.yml
 # Created on demand by Docker when the bind source doesn't exist.
 browser-data/
 native_host/.host_wrapper.sh
+native_host/.host.log
