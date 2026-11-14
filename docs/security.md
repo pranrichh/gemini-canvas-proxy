@@ -1,56 +1,105 @@
 # Security
 
-The proxy's security model, configuration reference, and the protections enforced by each layer.
+The proxy puts an LLM endpoint on your machine, backed by your Google session's
+Canvas credentials. Two things can go wrong: someone else reaches the endpoint,
+or something you asked the model to look at reaches further than it should.
 
-## Threat model
+## What this is not
 
-The proxy exposes an LLM endpoint backed by your Google session's Canvas credentials. Two abuse paths matter: **local attackers** (other processes/users on the same machine or LAN) calling the API, and **malicious content** (web pages, prompt payloads, remote URLs) reaching the proxy or the extension.
+It is not a multi-tenant service. The bearer token is the only authentication,
+there is one user, and nothing is rate limited. If you expose it to a network,
+the token is all that stands between a stranger and your Gemini quota.
 
 ## HTTP boundary
 
-| Control | Default | Env var |
+| Control | Default | Configured by |
 |---|---|---|
-| Listen address | `127.0.0.1` (loopback only) | `PROXY_BIND` |
-| Bearer auth on every `/v1/*` endpoint | required | `PROXY_TOKEN` / token file |
-| Health endpoint | unauthenticated | — |
-| CORS | disabled (no `Access-Control-Allow-Origin`) | `PROXY_ALLOWED_ORIGIN` |
-| Max request body | 32 MB, rejected **before** reading | `PROXY_MAX_REQUEST_BYTES` |
-| Token file location | `native_host/.proxy_token` (bare metal) / `/browser-data/proxy-token` (Docker) | `PROXY_TOKEN_FILE` |
+| Listen address | `127.0.0.1` | `PROXY_BIND` |
+| Authentication | required on every `/v1` route and `/status` | `PROXY_TOKEN`, `PROXY_TOKEN_FILE` |
+| `/health` | open, by design | — |
+| CORS | no `Access-Control-Allow-Origin` unless an origin is named | `PROXY_ALLOWED_ORIGIN` |
+| Max request body | 32 MB, refused before the body is read | `PROXY_MAX_REQUEST_BYTES` |
+| Token file mode | `0600` | `setup.sh`, `entrypoint.sh` |
 
-- The listener binds `127.0.0.1` by default; `PROXY_BIND=0.0.0.0` is explicit opt-in with a startup warning. Even then, keep the port behind a firewall / private mesh.
-- Bearer comparison is constant-time (`hmac.compare_digest`). Missing/incorrect tokens get `401` + `WWW-Authenticate: Bearer`; a token that was never configured gets `503`.
-- CORS preflight returns `403` for any origin other than the single exact `PROXY_ALLOWED_ORIGIN` value. `Vary: Origin` is emitted when an origin is allowed.
-- Request bodies above the ceiling are rejected with `413` before `json.loads` reads them — no unbounded allocation from an attacker-controlled `Content-Length`.
+Details that matter:
 
-**Do not commit tokens.** `native_host/.proxy_token` and `gemini_proxy.bat` are gitignored; the Docker token lives in the `browser-data` volume.
+- Token comparison is constant-time (`hmac.compare_digest`). A wrong token gets
+  `401` with `WWW-Authenticate`; no token configured at all gets `503`, which is
+  a different problem and says so.
+- The body limit is enforced against `Content-Length` *before* reading, so a
+  large declared length cannot be used to make the process allocate.
+- Chunked bodies are read with a running total and cut off at the same limit.
+- Error responses close the connection. Without that, an unread request body
+  would be parsed as the next request on a keep-alive connection.
+- Binding `0.0.0.0` logs a warning at startup, because the bearer token is then
+  the only thing between the network and your quota.
 
 ## Extension boundary
 
-- Content script is scoped to `https://gemini.google.com/*` only — no `<all_urls>` host permissions, no `activeTab`, no `scripting`.
-- Every runtime message is validated: the sender must be a tab on the exact `https://gemini.google.com` origin, and responses are only accepted from the active Canvas tab.
-- All API traffic rides a private `MessageChannel` port transferred once during the ready handshake — no wildcard `postMessage` broadcasts, no cross-iframe eavesdropping.
-- Canvas-tab state and partial chunk buffers persist in `chrome.storage.session` with a 90-second TTL sweep, so interrupted transfers don't leave sensitive request bodies lying around.
+- The content script matches `https://gemini.google.com/*` and nothing else. No
+  `<all_urls>`, no `activeTab`, no `scripting`, no `webRequest`.
+- `chrome.runtime.onMessage` checks `sender.tab`, `sender.url`, and the exact
+  origin before doing anything. Failures get an explicit refusal, not silence.
+- Responses are only accepted from the tab currently registered as the Canvas
+  tab. A second Gemini tab cannot answer someone else's request.
+- Traffic after the handshake rides a private `MessagePort`. Nothing is
+  broadcast to `window` and there is no discoverable endpoint.
 
-## Remote image fetching (SSRF defense)
+One caveat, stated plainly: the handshake itself is a `postMessage` to the
+parent frame, and a sandboxed frame cannot read its parent's origin, so it goes
+out with `targetOrigin: "*"`. The receiving content script is what enforces the
+policy — it accepts a direct child frame or an opaque-origin (sandboxed) frame
+and ignores everything else. A page that could run script in Gemini's own origin
+could interfere, but such a page already has your session.
 
-Remote `http(s)://` image URLs are **disabled by default** (`PROXY_ALLOW_URL_FETCH`). When enabled:
+## SSRF: remote images
 
-- URL scheme/authority validated (HTTP(S) only, no userinfo)
-- Every resolved destination address checked against `ipaddress`: private, loopback, link-local, reserved, unspecified, and multicast ranges are rejected — including metadata endpoints (`169.254.169.254` etc.)
-- The destination policy is **reapplied on every redirect** via a custom redirect handler
-- Response bodies streamed with a 20 MB ceiling (`PROXY_MAX_IMAGE_BYTES`); declared `Content-Length` over the ceiling rejected before reading
-- `image/*` content type required
-- Failures are logged with a sanitized hostname and surfaced to the model as an explicit `[Remote image omitted: reason]` part
+Fetching an image from a URL the caller supplied turns the proxy into a request
+forwarder — the classic path to `http://169.254.169.254/` and to every service
+on the local network. It is therefore **off by default**.
 
-## Canvas API destination validation
+With `PROXY_ALLOW_URL_FETCH=true`:
 
-- The Canvas page accepts only `/v1beta/models/<model>:generateContent|streamGenerateContent` paths — no host-changing paths, no traversal (`..`), no authority characters.
-- The endpoint is built with `new URL(path, geminiApiOrigin)` and re-asserted to be `https://generativelanguage.googleapis.com` before fetching; the API key is appended via `searchParams` (never string-concatenated into a loggable URL).
-- The native host independently validates model identifiers (`^[A-Za-z0-9._-]+$`, no `..`) and returns `400` on invalid input before anything reaches native messaging.
+- only `http` and `https` are accepted, and credentials in the URL are refused;
+- the hostname is resolved and *every* returned address must be globally
+  routable — private, loopback, link-local, reserved, unspecified and multicast
+  are all rejected;
+- the check runs again on every redirect, so a public URL cannot bounce to a
+  private one;
+- the response must be `image/*`;
+- the body is streamed with a running cap (`PROXY_MAX_IMAGE_BYTES`, 20 MB) and
+  a declared `Content-Length` over the cap is refused before reading;
+- refusals are logged with a hostname only, and the model sees
+  `[Remote image omitted: reason]` rather than a silent gap.
+
+There is a residual DNS-rebinding window: the address is validated, then
+`urllib` resolves the name again when it connects. Closing it properly needs a
+pinned-IP connection. Given that the feature is opt-in and the proxy is
+loopback-only by default, that gap is documented rather than papered over.
+
+## Canvas-side validation
+
+The Canvas page is the last line, and it is deliberately narrow:
+
+- the request path must match
+  `/v1beta/models/<model>:(generateContent|streamGenerateContent)`;
+- `..` anywhere in the path is refused;
+- the URL is built with `new URL(path, origin)` and then the protocol and
+  hostname are re-checked, so a path cannot redirect the call;
+- the API key is appended with `searchParams`, never concatenated into
+  something that could be logged.
+
+The native host validates the model name independently (`^[A-Za-z0-9._-]+$`, no
+`..`) and returns `400` before any of it reaches native messaging.
 
 ## Operational notes
 
-- Treat `native_host/.proxy_token` / `/browser-data/proxy-token` as secrets. Don't put tokens in shell history, compose files, or shared config.
-- noVNC has no password by default — only expose `:6080` behind a private mesh; set `VNC_PASSWORD` + `-rfbauth` otherwise.
-- Docker runs the proxy as a non-root `proxy` user; the bridge Unix socket is mode `0600`.
-- The repo's own CI runs the stdlib test suite on every push/PR (read-only permissions).
+- Treat `native_host/.proxy_token` and `/browser-data/proxy-token` as secrets.
+  They are gitignored. Do not paste them into issues.
+- The container prints the token to its log on first start. That is convenient
+  and it means `docker compose logs` is sensitive.
+- noVNC has no password. Anyone who can reach `:6080` can drive the browser and
+  see the session. Keep it on loopback or behind a private network.
+- Inside the container the process runs as `proxy` (UID 1000); the bridge socket
+  is `0600` in `/tmp`.
+- The CI workflow has `contents: read` and runs the stdlib test suite only.

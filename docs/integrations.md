@@ -1,59 +1,35 @@
 # Integrations
 
-Point any OpenAI-compatible client at `http://127.0.0.1:8765/v1` with the generated bearer token as the API key.
-
-**Get the token:**
+Any client that speaks OpenAI chat completions works. Point it at
+`http://127.0.0.1:8765/v1` and use the token as the API key.
 
 ```bash
 # bare metal
-PROXY_TOKEN="$(cat native_host/.proxy_token)"
+TOKEN="$(cat native_host/.proxy_token)"
 
 # docker
-PROXY_TOKEN="$(docker compose exec -T proxy cat /browser-data/proxy-token)"
+TOKEN="$(docker compose exec -T proxy cat /browser-data/proxy-token)"
 ```
 
 ## curl
 
 ```bash
-curl http://127.0.0.1:8765/v1/chat/completions \
-  -H "Authorization: Bearer $PROXY_TOKEN" \
+curl -s http://127.0.0.1:8765/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"model":"gemini-3-flash-preview","messages":[{"role":"user","content":"Hello!"}]}'
+  -d '{"model":"gemini-3-flash-preview",
+       "messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-## Hermes Agent
-
-[Hermes Agent](https://github.com/NousResearch/hermes-agent) is an open-source AI agent framework with full tool calling support.
-
-### Option 1: Interactive setup
-
-1. Run `hermes model`
-2. Select **`Custom (Direct API)`**
-3. Enter:
-   - **Base URL**: `http://127.0.0.1:8765/v1`
-   - **API Key**: the bearer token printed by the setup script
-4. Pick a model (e.g. `gemini-3-flash-preview`)
-
-### Option 2: Manual config
-
-Add to `~/.hermes/config.yaml`:
-
-```yaml
-custom_providers:
-  - name: "Local (127.0.0.1:8765)"
-    base_url: http://127.0.0.1:8765/v1
-    api_key: "<token printed by setup>"
-    model: gemini-3-flash-preview
-    api_mode: chat_completions
-```
-
-Then:
+Streaming, one line per event:
 
 ```bash
-hermes chat -q "Say hello" --provider "Local (127.0.0.1:8765)" --model gemini-3-flash-preview
+curl -N http://127.0.0.1:8765/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gemini-3-flash-preview","stream":true,
+       "messages":[{"role":"user","content":"Count to five"}]}'
 ```
-
-Full tool calling (terminal, browser, file operations, MCP tools) works through the proxy — Gemini generates native function calls, Hermes executes them locally, and results return as native `functionResponse` parts.
 
 ## OpenAI Python SDK
 
@@ -66,12 +42,59 @@ client = OpenAI(
     api_key=os.environ["GEMINI_PROXY_TOKEN"],
 )
 
-response = client.chat.completions.create(
+stream = client.chat.completions.create(
     model="gemini-3-flash-preview",
-    messages=[{"role": "user", "content": "Hello!"}],
+    messages=[{"role": "user", "content": "Count to five"}],
+    stream=True,
 )
-print(response.choices[0].message.content)
+for chunk in stream:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        print(delta, end="", flush=True)
 ```
+
+Tool calling is plain OpenAI. The one thing to preserve is the signature on the
+assistant turn — pass the `tool_calls` object back exactly as you received it,
+including `x_gemini_thought_signature`, or Gemini rejects the history:
+
+```python
+import json
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}]
+
+messages = [{"role": "user", "content": "Weather in Paris?"}]
+first = client.chat.completions.create(
+    model="gemini-3-flash-preview", messages=messages, tools=tools,
+)
+assistant = first.choices[0].message
+messages.append(assistant.model_dump(exclude_none=True))
+
+call = assistant.tool_calls[0]
+messages.append({
+    "role": "tool",
+    "tool_call_id": call.id,
+    "content": json.dumps({"temperature_c": 18}),
+})
+
+second = client.chat.completions.create(
+    model="gemini-3-flash-preview", messages=messages, tools=tools,
+)
+print(second.choices[0].message.content)
+```
+
+`assistant.model_dump()` keeps the extra field, which is what makes the second
+request valid.
 
 ## OpenAI JavaScript SDK
 
@@ -85,17 +108,68 @@ const client = new OpenAI({
 
 const response = await client.chat.completions.create({
   model: "gemini-3-flash-preview",
-  messages: [{ role: "user", content: "Hello!" }],
+  messages: [{ role: "user", content: "Hello" }],
 });
+console.log(response.choices[0].message.content);
 ```
 
 ## LangChain
 
-```bash
-export OPENAI_API_KEY="$GEMINI_PROXY_TOKEN"
-export OPENAI_API_BASE=http://127.0.0.1:8765/v1
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    base_url="http://127.0.0.1:8765/v1",
+    api_key="<token>",
+    model="gemini-3-flash-preview",
+)
+print(llm.invoke("Hello").content)
 ```
 
-## OpenClaw / LiteLLM / anything else
+Or with environment variables, which most LangChain wrappers pick up:
 
-Any tool that accepts an OpenAI base URL works: set `base_url`/`baseURL` to `http://127.0.0.1:8765/v1` and use the bearer token as the API key.
+```bash
+export OPENAI_API_KEY="<token>"
+export OPENAI_BASE_URL="http://127.0.0.1:8765/v1"
+```
+
+## LiteLLM
+
+```yaml
+model_list:
+  - model_name: gemini-canvas
+    litellm_params:
+      model: openai/gemini-3-flash-preview
+      api_base: http://127.0.0.1:8765/v1
+      api_key: <token>
+```
+
+## Hermes Agent
+
+Interactive: `hermes model` → **Custom (Direct API)** → base URL
+`http://127.0.0.1:8765/v1`, API key = the token, model
+`gemini-3-flash-preview`.
+
+Or in `~/.hermes/config.yaml`:
+
+```yaml
+custom_providers:
+  - name: "Canvas (local)"
+    base_url: http://127.0.0.1:8765/v1
+    api_key: "<token>"
+    model: gemini-3-flash-preview
+    api_mode: chat_completions
+```
+
+```bash
+hermes chat -q "Say hello" --provider "Canvas (local)" --model gemini-3-flash-preview
+```
+
+Tool calling works end to end: Gemini emits a native function call, Hermes runs
+it locally, and the result returns as a `functionResponse`.
+
+## Anything else
+
+The proxy implements `/v1/chat/completions` and `/v1/models`. If a client needs
+`/v1/completions` (the old text-completion endpoint) or `/v1/embeddings`, it
+will not work — those are not implemented rather than emulated badly.

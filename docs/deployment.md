@@ -1,123 +1,169 @@
 # Deployment
 
-Ways to run the Gemini Canvas Proxy: bare metal, Docker Compose (local or VPS), or Podman.
+Three ways to run it: directly on your machine, in Docker Compose, or as a
+Podman quadlet. They share the same code and the same token format; what differs
+is where Chromium lives.
 
 ## Bare metal
 
 ```bash
 git clone https://github.com/pranrichh/gemini-canvas-proxy.git
 cd gemini-canvas-proxy
-./setup.sh            # Linux/macOS — or .\setup.ps1 on Windows
+./setup.sh
 ```
 
-The setup script verifies Python, writes the native messaging manifest, and generates a bearer token. The native host auto-starts when Chrome loads the extension and auto-stops when Chrome closes. Keep the Gemini tab open — the proxy lives and dies with it.
+`setup.sh` checks for Python 3.8+, writes the native-messaging manifest into
+every browser profile it can find, generates `native_host/.proxy_token`, and
+prints your token with a ready-to-run `curl`. Use `--list` to see which browsers
+it detected before installing anything, and `--extension-id ID` for a
+non-interactive install.
 
-- **Stop:** `./stop.sh` (Linux/macOS), or reload/disable the extension.
-- **Windows:** stop the `python.exe` process whose command line contains `gemini_proxy`, or reload the extension.
+The native host is not a daemon. Chrome starts it when the extension connects
+and kills it when the last port closes, so:
 
-## Docker Compose (self-contained)
+- there is nothing to enable at boot;
+- nothing runs while the browser is closed;
+- `./stop.sh` exists for the leftovers — a crashed host, or one you started by
+  hand while debugging.
 
-The single-service stack runs everything in one container: Xvfb + Openbox + Chromium + x11vnc + noVNC + the Python proxy. Log into Gemini through the noVNC web UI in your own browser — no local Chrome needed.
+After a browser restart, reload the extension once at `chrome://extensions`. If
+you skip that, the extension's service worker starts before the manifest is
+re-read and the first `connectNative` fails.
 
-**What's in the container:** virtual display, window manager, Chromium with a persistent profile, VNC server, noVNC UI on `:6080`, and the OpenAI-compatible API on `:8765`. Login cookies, the native messaging manifest, and the bearer token survive container restarts via the `browser-data` volume. The proxy runs in two explicit roles (`--http-only` entrypoint + `--bridge-only` Chromium-launched bridge) talking over a mode-`0600` Unix socket — only one process ever binds port 8765.
+Windows uses `.\setup.ps1`. It writes a `.bat` shim (native hosts on Windows
+must be executables) and registers it under `HKCU`. To stop it, end the
+`python.exe` process whose command line contains `gemini_proxy`, or reload the
+extension.
 
-### Local loopback (default)
+## Docker Compose
+
+One container holds the whole stack: Xvfb, Openbox, Chromium, x11vnc, websockify
+and the proxy. You log into Gemini through noVNC in your own browser, so no
+Chromium is needed on the host.
 
 ```bash
 docker compose up -d --build
 open http://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale
 ```
 
-Both ports bind `127.0.0.1` — nothing on your LAN can reach them.
+Both published ports bind `127.0.0.1`, so nothing on your LAN can reach them.
 
-**First-time setup inside the container:**
+First run, inside the noVNC window:
 
-1. In the noVNC window: log in to `gemini.google.com`, open `chrome://extensions`, enable Developer mode, **Load unpacked → `/app/extension`** (bind-mounted read-only from the repo).
-2. Copy the Extension ID (32 lowercase `[a-p]` chars).
-3. From your laptop:
-   ```bash
-   docker compose exec proxy /app/setup-extension.sh <extension-id>
-   docker compose restart proxy
-   ```
-4. Read the token and test:
-   ```bash
-   PROXY_TOKEN="$(docker compose exec -T proxy cat /browser-data/proxy-token)"
-   curl -H "Authorization: Bearer $PROXY_TOKEN" http://127.0.0.1:8765/v1/models
-   ```
+1. Log in at `gemini.google.com`.
+2. `chrome://extensions` → Developer mode → **Load unpacked** → `/app/extension`
+   (the repo is bind-mounted at `/app`).
+3. Copy the 32-character extension ID.
 
-After setup, container restarts, host reboots, and `docker compose down/up` cycles all preserve login, manifest, and token.
+Then from the host:
 
-### VPS / Tailscale (override)
+```bash
+docker compose exec proxy /app/setup-extension.sh <extension-id>
+docker compose restart proxy
+```
 
-`docker-compose.vps.yml` flips both ports to `0.0.0.0` so they're reachable via the VPS's Tailscale IP:
+The restart matters: Chromium reads `NativeMessagingHosts/` once at startup.
+
+Finally, open a Canvas, paste `canvas-proxy.html`, and press Preview. Then:
+
+```bash
+TOKEN="$(docker compose exec -T proxy cat /browser-data/proxy-token)"
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/health
+```
+
+### What survives a restart
+
+| Thing | Where it lives | Survives `down`/`up` | Survives `down -v` |
+|---|---|---|---|
+| Google login | Chromium profile in `/browser-data` | yes | no |
+| Loaded extension | same profile | yes | no |
+| Native messaging manifest | `/browser-data/chromium-profile/NativeMessagingHosts` | yes | no |
+| Bearer token | `/browser-data/proxy-token` | yes | no |
+
+`docker compose down -v` deletes the volume. Everything above has to be redone.
+
+### Two roles, one port
+
+The entrypoint runs `gemini_proxy.py --http-only`: it owns port 8765 and listens
+on `/tmp/gemini-canvas-proxy.sock`. Chromium separately launches
+`gemini_proxy_bridge.sh`, which runs `--bridge-only` and pumps stdio to that
+socket.
+
+The split is not decoration. Chromium restarts its native host whenever the
+service worker is recycled; if that process also owned the TCP listener, every
+restart would drop the port and clients would see connection refused. With the
+split, the HTTP side stays up and simply reports `502 bridge unavailable` for
+the second or two the bridge is missing.
+
+### VPS and Tailscale
+
+`docker-compose.vps.yml` publishes both ports on all interfaces:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
-# From any tailnet device:
-open http://<vps-tailscale-ip>:6080/vnc.html?autoconnect=true&resize=scale
-curl -H "Authorization: Bearer $PROXY_TOKEN" http://<vps-tailscale-ip>:8765/v1/models
+curl -H "Authorization: Bearer $TOKEN" http://<tailscale-ip>:8765/v1/models
 ```
 
-**Security:** the proxy requires its bearer token, but noVNC has no VNC password by default. Authentication does not replace network isolation — only expose `0.0.0.0:6080` and `0.0.0.0:8765` behind a private mesh (Tailscale, WireGuard, firewall) restricted to known peers. Keep the token private. For a VNC password, set `VNC_PASSWORD` and pass `-rfbauth` to x11vnc in `entrypoint.sh`.
+The proxy needs its token; noVNC needs a private network in front of it. It has
+no password, and anyone who reaches it can drive the browser and watch the
+session. Tailscale, WireGuard, or a firewall rule restricted to known peers —
+not a public interface.
 
-### Shared folder with the host (override)
+### Shared folder with the host
 
-By default `/browser-data` is a Docker-managed named volume. To share it with the host — so the same folder backs both the in-container Chromium and a host Chrome you launch separately:
+By default `/browser-data` is a named volume. To point it at a host directory
+instead — useful when you want to inspect the profile, or reuse the cookies from
+a host Chrome launched against the same path:
 
 ```bash
-# Default: shares ./browser-data (created next to docker-compose.yml on first run)
 docker compose -f docker-compose.yml -f docker-compose.shared.yml up -d --build
-
-# Custom host path
 BROWSER_DATA_HOST=~/.gemini-canvas-proxy/browser-data \
   docker compose -f docker-compose.yml -f docker-compose.shared.yml up -d --build
 ```
 
-Point host Chrome at the same path to reuse cookies:
+Overrides stack:
 
 ```bash
-google-chrome --user-data-dir="$PWD/browser-data" chrome://extensions
+docker compose -f docker-compose.yml -f docker-compose.shared.yml -f docker-compose.vps.yml up -d
 ```
 
-Combine all overrides for a VPS reachable via Tailscale with browser state on a host path:
+### Image facts
 
-```bash
-docker compose -f docker-compose.yml \
-               -f docker-compose.shared.yml \
-               -f docker-compose.vps.yml up -d --build
-```
-
-### Image notes
-
-- Base `python:3.12-slim` + Debian's `chromium`, `xvfb`, `x11vnc`, `novnc`, `websockify`, `openbox`. ~600 MB on disk.
-- Runs as non-root `proxy` user (UID/GID 1000) via `tini` as PID 1.
-- `/dev/shm` bumped to 1 GB (`shm_size: 1g`) — Chromium OOMs without it.
-- Managed Chromium policy (`chromium-policies/managed/gemini-proxy-signin.json`: `BrowserSignin: 0`, `SyncDisabled: true`) stops Google's Account Reconcilor from wiping cookie-only sessions — this is what makes login survive restarts. The entrypoint warns if the policy file is missing.
-- Stop: `docker compose down`. Wipe everything: `docker compose down -v`. Logs: `docker compose logs -f`.
+- Base `python:3.12-slim` plus Debian's `chromium`, `xvfb`, `x11vnc`, `novnc`,
+  `websockify`, `openbox`. About 1.6 GB on disk after the browser stack.
+- Runs as `proxy` (UID/GID 1000); `preflight.sh` chowns a host bind mount as root
+  first, then drops privileges with `gosu`.
+- `shm_size: 1g` in compose. Chromium writes heavily to `/dev/shm` and the 64 MB
+  default causes renderer crashes.
+- `--password-store=basic` in the Chromium flags. Without it, Chromium looks for
+  gnome-keyring, fails, and can leave the profile half-written — one of the ways
+  a working login disappears on restart.
+- The managed policy at `/etc/chromium/policies/managed/gemini-proxy-signin.json`
+  (`BrowserSignin: 0`, `SyncDisabled: true`) stops Google's account reconcilor
+  from discarding cookie-only sessions. The entrypoint warns if it is missing.
+- A crashed Chromium is restarted by a watchdog in the entrypoint with a backoff,
+  so the container does not sit "healthy" with nothing behind it.
+- Logs: `docker compose logs -f` tails the proxy's stderr.
 
 ## Podman
 
-For rootless/systemd environments (Fedora, RHEL, etc.), a quadlet unit (`gemini-canvas-proxy.container`) and guide are included:
+Rootless hosts use the quadlet unit in `gemini-canvas-proxy.container`.
+[docs/podman.md](podman.md) has the full walkthrough, including the VNC toggle
+for small VPS instances:
 
 ```bash
-podman build -t localhost/gemini-canvas-proxy:local .
-# adjust Volume= paths in gemini-canvas-proxy.container, then:
-mkdir -p ~/.config/containers/systemd
-cp gemini-canvas-proxy.container ~/.config/containers/systemd/
-systemctl --user daemon-reload
-systemctl --user start gemini-canvas-proxy.service
-```
-
-See [docs/podman.md](podman.md) for the full guide, including a VNC toggle to save RAM on small VPS boxes:
-
-```bash
-podman exec gemini-canvas-proxy /app/toggle-vnc.sh stop    # save CPU/RAM
-podman exec gemini-canvas-proxy /app/toggle-vnc.sh start   # bring noVNC back
+podman exec gemini-canvas-proxy /app/toggle-vnc.sh stop
+podman exec gemini-canvas-proxy /app/toggle-vnc.sh start
 podman exec gemini-canvas-proxy /app/toggle-vnc.sh status
 ```
 
-## Daily usage
+## Running it day to day
 
-1. **Keep the Gemini tab open** — the Canvas tab with the proxy HTML must stay open. Background tab, minimized window, or a separate Chrome profile all work.
-2. **Reload the extension** after a browser restart — the native host auto-reconnects.
-3. **The proxy auto-starts** when Chrome launches the extension — no manual process management.
+The Canvas tab is the credential. Everything else can come and go.
+
+1. Keep the tab open. Background, minimised, on another workspace — all fine.
+   Closed, and requests fail with a 504 that names the cause.
+2. After a browser restart, reload the extension once.
+3. Watch the Canvas page. It shows three links separately: page, extension,
+   native host. Any of them failing has a different fix, and the page says
+   which one.

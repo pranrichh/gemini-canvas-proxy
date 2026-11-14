@@ -1,69 +1,130 @@
-# API Reference
+# API
 
-The proxy exposes an OpenAI-compatible HTTP API on `localhost:8765`.
+An OpenAI-compatible surface at `http://127.0.0.1:8765`. Everything under
+`/v1` needs `Authorization: Bearer <token>`; the token is in
+`native_host/.proxy_token` on bare metal and `/browser-data/proxy-token` in
+Docker.
 
 ## Endpoints
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/v1/chat/completions` | POST | OpenAI-compatible chat completions (tools, streaming, multimodal) |
-| `/v1/models` | GET | List available models |
-| `/health` | GET | Health check (the only unauthenticated endpoint) |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/v1/chat/completions` | yes | chat, tools, images, streaming |
+| GET | `/v1/models` | yes | names that have worked with a Canvas key |
+| GET | `/v1/models/{id}` | yes | one entry from that list |
+| GET | `/status` | yes | bridge state, config, in-flight count |
+| GET | `/health` | no | liveness plus bridge state, for healthchecks |
+| OPTIONS | any | no | CORS preflight, only useful with `PROXY_ALLOWED_ORIGIN` |
 
-All `/v1/*` endpoints require `Authorization: Bearer <token>`. The token is generated on first setup (`native_host/.proxy_token` on bare metal, `/browser-data/proxy-token` in Docker) and printed by the setup scripts. `curl` returns `401` with `WWW-Authenticate: Bearer` on missing/invalid tokens.
+`/health` is deliberately unauthenticated and deliberately dull:
+
+```json
+{
+  "status": "ok",
+  "bridge": { "connected": true, "connected_seconds": 412.7 },
+  "uptime_seconds": 913.2
+}
+```
+
+If `bridge.connected` is false, the process is alive but nothing can reach a
+model. That distinction is what makes the endpoint worth polling.
 
 ## Chat completions
-
-Minimal request:
 
 ```json
 {
   "model": "gemini-3-flash-preview",
   "messages": [
-    {"role": "system", "content": "You are concise."},
-    {"role": "user", "content": "Explain HTTP in one sentence."}
+    {"role": "system", "content": "Answer in one sentence."},
+    {"role": "user", "content": "What is a MessageChannel?"}
   ]
 }
 ```
 
-Responses use standard OpenAI chat completion shape, including `choices[0].message`, `finish_reason`, and `usage`.
+The response is a standard OpenAI completion: `id`, `object`, `created`,
+`model`, `choices[0].message`, `finish_reason`, `usage`.
 
-### Supported generation parameters
+### Parameters
 
-| OpenAI parameter | Maps to Gemini | Notes |
+| Request field | Becomes | Notes |
 |---|---|---|
 | `temperature` | `generationConfig.temperature` | |
-| `max_tokens` / `max_completion_tokens` | `generationConfig.maxOutputTokens` | |
+| `max_tokens`, `max_completion_tokens` | `generationConfig.maxOutputTokens` | `max_completion_tokens` wins if both are set |
 | `top_p` | `generationConfig.topP` | |
 | `top_k` | `generationConfig.topK` | |
-| `stop` (string or list) | `generationConfig.stopSequences` | Scalar becomes a one-item list |
+| `stop` | `generationConfig.stopSequences` | a string becomes a one-item list |
 | `seed` | `generationConfig.seed` | |
 | `frequency_penalty` | `generationConfig.frequencyPenalty` | |
 | `presence_penalty` | `generationConfig.presencePenalty` | |
-| `response_format: {"type":"json_object"}` | `generationConfig.responseMimeType` | |
+| `response_format` | `responseMimeType` (+ `responseSchema`) | `json_object` and `json_schema` |
+| `tools` | `tools[].functionDeclarations` | schemas sanitized, types uppercased |
+| `stream` | `:streamGenerateContent?alt=stream` | see below |
+| `stream_options.include_usage` | final chunk carries `usage` | |
+| `n > 1` | dropped | Gemini returns one candidate; a warning is logged |
+| `logprobs`, `top_logprobs` | dropped | not exposed by the Canvas key |
 
-Unsupported options (`n > 1`, `logprobs`, `top_logprobs`, malformed `stop`) are **ignored with a stderr warning**, not silently dropped — check proxy logs to see what was skipped. Gemini returns one candidate per request.
+Anything you know Gemini accepts but OpenAI does not name can be passed through
+`extra_body.google.generation_config`, and it is merged into
+`generationConfig` verbatim:
+
+```json
+{"extra_body": {"google": {"generation_config": {"thinkingConfig": {"thinkingBudget": 0}}}}}
+```
+
+That is the supported way to reach thinking controls. There is no invented
+mapping for `reasoning_effort`; the OpenAI name does not correspond to anything
+Gemini calls the same thing.
+
+### Streaming
+
+```json
+{"model": "gemini-3-flash-preview", "stream": true,
+ "messages": [{"role": "user", "content": "Count to five"}]}
+```
+
+`Content-Type: text/event-stream`. Each event is a `chat.completion.chunk`:
+
+```text
+data: {"id":"chatcmpl-e2…","object":"chat.completion.chunk","created":1731…,
+       "model":"gemini-3-flash-preview",
+       "choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {…"delta":{"content":"One"}…}
+data: {…"delta":{"content":", two"}…}
+data: {…"delta":{},"finish_reason":"stop"}
+data: [DONE]
+```
+
+Tool calls arrive as `delta.tool_calls` with `index`, `id`, `function.name` and
+`function.arguments`, followed by a chunk with `finish_reason: "tool_calls"`.
+With `stream_options.include_usage`, one extra chunk carries `usage` and an
+empty `choices` array before `[DONE]`.
+
+This is a real stream: bytes leave the proxy as Gemini produces them. There is
+no buffering step and no replay.
 
 ### Finish reasons
-
-Raw Gemini finish reasons map to OpenAI values:
 
 | Gemini | OpenAI |
 |---|---|
 | `STOP` | `stop` |
 | `MAX_TOKENS` | `length` |
-| `SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` | `content_filter` |
-| anything else | `stop` (with a warning) |
+| `SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`, `LANGUAGE` | `content_filter` |
+| `OTHER`, `MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL` | `stop` |
+| `functionCall` present | `tool_calls` |
 
-Safety-blocked or empty responses become HTTP `502` with the `blockReason`, `finishReason`, and `safetyRatings` preserved under `error.details` — so a blocked prompt never masquerades as an empty success.
+An unrecognised reason maps to `stop` and logs a warning naming it.
 
-### Streaming
+A blocked prompt is not an empty success. Gemini returning no candidates is
+surfaced as `502` with the reason preserved:
 
-Streaming is simulated: the full Gemini response is buffered, then emitted as a single SSE chunk plus `data: [DONE]`. Tool calls are correctly emitted as `choices[0].delta.tool_calls` with a final `finish_reason: "tool_calls"`, so agent frameworks see proper function-call deltas.
+```json
+{"error": {"message": "Gemini returned no candidates (block reason: SAFETY)",
+           "type": "proxy_error", "code": 502,
+           "details": {"blockReason": "SAFETY", "safetyRatings": [...]}}}
+```
 
-## Multimodal input
-
-Send images as OpenAI-format content arrays:
+## Images in
 
 ```json
 {
@@ -71,50 +132,85 @@ Send images as OpenAI-format content arrays:
   "messages": [{
     "role": "user",
     "content": [
-      {"type": "text", "text": "What's in this image?"},
-      {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBOR..."}}
+      {"type": "text", "text": "What is this?"},
+      {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBOR…"}}
     ]
   }]
 }
 ```
 
-- **`data:` URIs** work by default.
-- **Remote `http(s)://` images** are **disabled by default** (fetching caller-controlled URLs expands the proxy's network access). Opt in with `PROXY_ALLOW_URL_FETCH=true`; the host then rejects non-public destinations and redirects (private/loopback/link-local/metadata addresses), caps each response at 20 MB (`PROXY_MAX_IMAGE_BYTES`), requires an `image/*` content type, and converts accepted images to `inlineData`. Rejected images become an explicit `[Remote image omitted: reason]` text part plus a sanitized stderr log.
+`data:` URIs work out of the box. `http(s)://` URLs are refused unless
+`PROXY_ALLOW_URL_FETCH=true`, because fetching a URL the caller chose turns the
+proxy into a request forwarder. When enabled, the host resolves the hostname,
+rejects anything that is not a public address, re-checks on every redirect,
+requires an `image/*` content type, and caps the body at 20 MB. A refused image
+becomes a `[Remote image omitted: reason]` text part so the model can see that
+something was dropped.
 
-## Image generation
+`file` and `input_file` parts are refused with a 400. Inline the content or send
+an image.
 
-Nano Banana / Nano Banana 2 models return images as markdown data URLs in `message.content`:
+## Images out
 
+Image models return a markdown data URL in `message.content`:
+
+```text
+![generated_image](data:image/png;base64,iVBOR…)
 ```
-![generated_image](data:image/png;base64,iVBOR...)
-```
 
-## Tool / function calling
+It is a data URL rather than a file so the response stays a single JSON object
+with no side channel to clean up.
 
-The proxy uses **native Gemini function calling** for outgoing tool calls and conversation history:
+## Tools
 
-- **Outgoing**: OpenAI `tools` are translated to Gemini `tools[{functionDeclarations}]` with **UPPERCASE** type values (`STRING`, `OBJECT`, ...) — required by Gemini 1.5+.
-- **History**: assistant `tool_calls` become native `functionCall` parts, and tool results become `functionResponse` parts in a `user` turn. Gemini 3 requires a `thoughtSignature` on every `functionCall` in history — real signatures captured from responses round-trip through the OpenAI layer as `x_gemini_thought_signature`; unsigned calls get a compatibility fallback with a stderr warning.
-- **Schema sanitization**: tool schemas are recursively stripped of fields Gemini rejects (`$schema`, `additionalProperties`, `title`, `format`, `nullable`, `default`, `examples`, `maxLength`/`minLength`/`pattern`, `maxItems`/`minItems`/`uniqueItems`, `items: true`) — preventing `MALFORMED_FUNCTION_CALL` / empty responses when tools come from MCP servers or strict JSON Schema sources.
+OpenAI `tools` become Gemini `functionDeclarations` with uppercase type names.
+Two things are handled that are easy to get wrong:
 
-## Large payloads (>900 KB)
+**Schemas are sanitized.** Gemini accepts a strict subset of JSON Schema and
+returns `MALFORMED_FUNCTION_CALL` — which reaches the caller as an empty
+response — for anything outside it. `$schema`, `$ref`, `additionalProperties`,
+`anyOf`/`oneOf`/`allOf`, `format`, `default`, `pattern`, numeric and length
+bounds, `title` and the rest are stripped recursively. `items: true` becomes
+`items: {}`.
 
-Chrome's native messaging cap is 1 MB host→extension. The proxy chunks oversized requests automatically:
+**Signatures round-trip.** Gemini 3 requires a `thoughtSignature` on every
+`functionCall` in history. Responses carry it as
+`tool_calls[].x_gemini_thought_signature`; sending that structure back in the
+next request preserves it. A call without a signature gets a placeholder and a
+logged warning — usually a sign that a client rebuilt the message instead of
+passing it through.
 
-1. The host splits the serialized JSON bytes into 600 KB pieces
-2. Each piece is base64-encoded into a separate `api_request_chunk` native message (every envelope verified ≤ 1 MB)
-3. The extension reassembles the exact byte stream, decodes UTF-8 strictly, and forwards to Canvas
+Consecutive `tool` messages are merged into a single `user` turn, because Gemini
+requires alternating roles and rejects two `user` turns in a row.
 
-No HTTP fetch, no localhost access, no Local Network Access issues — pure native messaging. Works with CJK/emoji payloads byte-identically.
+## Large requests
 
-## Error codes
+Above roughly 900 KB the host chunks. You do not have to do anything; the
+threshold and the reassembly are internal. The practical ceiling is
+`PROXY_MAX_REQUEST_BYTES` (32 MB default), and the hard ceiling imposed by the
+chunk count is 76.8 MB.
 
-| Code | Meaning |
+## Errors
+
+| Status | When |
 |---|---|
-| `400` | Invalid JSON or invalid model identifier (letters, digits, `.`, `_`, `-` only) |
-| `401` | Missing/invalid bearer token |
-| `403` | CORS preflight from a non-allowed origin |
-| `413` | Request body exceeds `PROXY_MAX_REQUEST_BYTES` (32 MB default) |
-| `502` | Gemini blocked/empty response (details in `error.details`), or native-messaging bridge unavailable |
-| `503` | No bearer token configured |
-| `504` | Canvas tab not responding within 60 s |
+| `400` | body is not JSON, not an object, has no messages array, bad model name, malformed data URI |
+| `401` | missing or wrong bearer token, with `WWW-Authenticate` |
+| `403` | CORS preflight from an origin that is not `PROXY_ALLOWED_ORIGIN` |
+| `404` | unknown path or unknown model id, as JSON |
+| `411` | no `Content-Length` and no chunked encoding |
+| `413` | body above `PROXY_MAX_REQUEST_BYTES` |
+| `500` | the proxy itself is misconfigured, e.g. `PROXY_PORT` is not a number |
+| `502` | Gemini blocked the response, the bridge is gone, or the Canvas page errored |
+| `503` | no bearer token is configured at all |
+| `504` | nothing answered within `PROXY_REQUEST_TIMEOUT` |
+
+Every error body has the same shape:
+
+```json
+{"error": {"message": "…", "type": "proxy_error", "code": 504}}
+```
+
+with an optional `details` object. A `504` message distinguishes "no request
+reached the browser" from "the Canvas page did not answer in time", because
+those have different fixes.

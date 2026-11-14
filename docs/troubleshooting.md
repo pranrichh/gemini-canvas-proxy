@@ -1,85 +1,214 @@
 # Troubleshooting
 
-Common errors, their causes, and fixes.
+The first question is always *which link is broken*. The Canvas page answers it:
+it shows the page, the extension relay and the native host separately. If two
+are lit and one is not, skip to that section.
 
-## "No Canvas tab found"
+## Reading the Canvas page
 
-- Make sure you're on `gemini.google.com` with the proxy HTML in the Preview iframe
-- Reload the extension at `chrome://extensions/`
-- Check the extension's service worker console for debug logs
+| What it says | What it means |
+|---|---|
+| Waiting for the extension | the content script has not answered the handshake |
+| Extension connected, native host offline | page ⇄ extension works; no Python process behind it |
+| Ready | all three links up |
 
-## "Specified native messaging host not found"
+`Waiting for the extension` with the extension installed usually means the tab
+was open before the extension was loaded. Reload the tab.
 
-- Re-run the setup script with the correct extension ID
-- If using **Chromium snap** (Ubuntu), the manifest must be in `~/snap/chromium/common/chromium/NativeMessagingHosts/` — the setup script handles this automatically
-- Verify the `path` in the manifest points to the correct absolute path of `gemini_proxy.py`
-- Extension IDs must be exactly 32 characters from `[a-p]` — the setup scripts now reject anything else
+`Native host offline` is the interesting one. It means `connectNative` either
+never started a process or the process died. Check
+`chrome://extensions` → the extension → **Errors**, and click **service worker**
+to open its console; the disconnect reason is logged there.
 
-## 401 from Gemini API
+## `Specified native messaging host not found`
 
-- The Canvas key may have expired — re-paste the proxy HTML into Canvas
-- Try a different model name (the key is model-scoped)
-- Make sure `const apiKey = "";` is at the top of the script (Canvas auto-injects the key)
+The manifest is missing, in the wrong directory, or names the wrong extension.
 
-## 403 "unregistered caller"
+```bash
+./setup.sh --list          # which browsers it can see
+```
 
-- The model name in your request doesn't match what Canvas is promoting
-- Try `gemini-3-flash-preview`, `gemini-2.5-flash-preview-05-20`, or check Google's current Canvas model
+Then confirm the manifest exists and points at a real file:
 
-## [ERROR] Expected identifier but found "!"
+```bash
+cat ~/snap/chromium/common/chromium/NativeMessagingHosts/com.gemini.proxy.json
+```
 
-- **Cause**: pasting `canvas-proxy.html` into a default React Canvas. Gemini's `esbuild` compiler fails on raw HTML tags like `<!DOCTYPE html>`.
-- **Fix**: when starting the Canvas, explicitly ask for **"Create an HTML web app"** — this makes Gemini use the HTML renderer, which parses the proxy code correctly.
+The `path` must be absolute and executable. On Ubuntu the Chromium snap reads
+from `~/snap/chromium/common/chromium/`, not `~/.config/chromium/` — the setup
+script handles both, but a manifest written by an older version of it may be in
+the wrong place. Delete the stale one and re-run.
 
-## Empty response / `completion_tokens: 0` on image inputs
+After changing the manifest, restart the browser. Chromium reads the directory
+once at startup.
 
-- **Cause**: the proxy enables Gemini thinking by default (`includeThoughts: True`). On image inputs, thinking burns hidden tokens that count against `max_tokens`, so a low budget (20–100) returns empty with `finish_reason: "length"` and 0 output tokens.
-- **Fix**: pass `"reasoning_effort": "none"` in the OpenAI body — maps to `thinkingConfig: {includeThoughts: False, thinkingBudget: 0}`. Raising `max_tokens` also works but spends a huge output budget you don't need for a one-word answer.
+## `Access to the specified native messaging host is forbidden`
 
-## empty_delta / empty response after a tool list
+The extension ID in the manifest does not match the loaded extension. This
+happens when the extension is removed and re-added, because the ID changes.
+Re-run `setup.sh` with the new ID.
 
-- **Cause**: `MALFORMED_FUNCTION_CALL`. Gemini rejected a tool schema field like `$schema`, `additionalProperties`, or `format`.
-- **Fix**: the proxy sanitizes schemas automatically; if you still hit this, check the proxy logs to identify the offending field, and consider whether the tool source (MCP server, etc.) generates non-standard JSON Schema.
+## The page says "Canvas did not inject an API key"
 
-## Text-encoded tool calls (e.g. `[terminal(command='...')]` as plain text)
+Canvas rewrites the literal `const apiKey = "";` at compile time. If that line
+was edited, reformatted, or the page was pasted into a Canvas that is not using
+the HTML renderer, nothing is injected.
 
-- **Cause**: broken tool-call pipeline — either streaming dropped `tool_calls`, or a `thoughtSignature` is missing from history (Gemini 3 requirement).
-- **Fix**: restart the conversation (history contamination is a common cause of persistent text-fallback), and confirm the extension is reloaded so the service worker runs current code.
+Re-paste the current `canvas-proxy.html` without modifying it. When creating the
+Canvas, ask for **"Create an HTML web app"** — a plain React Canvas runs the code
+through esbuild, which fails on `<!DOCTYPE html>` with
+`Expected identifier but found "!"`.
+
+## 401 or 403 from the Gemini API
+
+`401` means the key was rejected: the Canvas session expired, or the page was
+re-pasted without the key. Reload the Canvas and re-paste.
+
+`403 unregistered caller` means the key is valid but not for that model. The
+Canvas key is scoped to whatever model the session is promoting. Try a different
+name from `/v1/models`, or ask the Canvas session which model it is using.
+
+## Empty response with `finish_reason: "length"`
+
+The model hit `max_tokens` before emitting anything. Reasoning models spend
+output tokens on internal thinking, and those count against the same budget. If
+you set `max_tokens` to 50 for a one-word answer, a thinking model can burn all
+50 before it starts answering.
+
+Either raise `max_tokens`, or turn thinking down through the passthrough:
+
+```json
+{"model": "gemini-3-flash-preview",
+ "max_tokens": 64,
+ "extra_body": {"google": {"generation_config": {"thinkingConfig": {"thinkingBudget": 0}}}},
+ "messages": [{"role": "user", "content": "Say OK"}]}
+```
+
+There is no `reasoning_effort` translation. Gemini does not use that name, so
+inventing a mapping would be guessing; `extra_body` passes what you actually
+want.
+
+## Empty response or `MALFORMED_FUNCTION_CALL` when tools are present
+
+Gemini rejected part of a tool schema. The proxy strips the keywords Gemini
+refuses (`$ref`, `anyOf`, `additionalProperties`, `format`, bounds, and so on),
+but a schema with no usable `type` left after stripping can still fail.
+
+Look at the proxy's stderr for the warning naming the function, then simplify
+that tool's schema. MCP servers that generate full JSON Schema are the usual
+source.
+
+## Tool calls arrive as text
+
+The model wrote `[terminal(command="...")]` into its message instead of emitting
+a function call. Two causes:
+
+- the previous assistant turn in the history lost its `thoughtSignature`
+  because the client rebuilt the message instead of passing the tool call back
+  unchanged;
+- the tool schema was rejected, so the model improvised.
+
+Start a fresh conversation and check the proxy log for a
+`missing thoughtSignature` warning. If it appears, the client is not
+round-tripping `x_gemini_thought_signature`.
 
 ## 502 with `error.details`
 
-- Gemini blocked the request (safety/policy) or returned no candidates — the details preserve `blockReason`, `finishReason`, and `safetyRatings`. A blocked prompt is no longer silently empty.
-- Or: the native-messaging bridge is unavailable (Docker `--http-only` with no `--bridge-only` connected).
+Either Gemini blocked the prompt (`blockReason`, `finishReason`,
+`safetyRatings` are in the details) or there is no bridge:
+
+```bash
+curl -s http://127.0.0.1:8765/health
+```
+
+`"bridge": {"connected": false}` in Docker means Chromium has not started the
+bridge process — usually because `setup-extension.sh` was never run for the
+current extension ID, or the container was not restarted after running it.
 
 ## 504 Gateway Timeout
 
-- The Canvas tab is closed, unresponsive, or the extension isn't routing. Reopen the Canvas tab / reload the extension.
+The message tells you which case you are in.
 
-## Docker: login doesn't survive restarts
+*"no request reached the browser"* — the extension is not connected at all. Open
+the Canvas page and check the chain.
 
-- The image ships the managed policy `BrowserSignin: 0` + `SyncDisabled: true` at `/etc/chromium/policies/managed/gemini-proxy-signin.json`. If the entrypoint warns it's missing, you're on an old image — rebuild.
-- Ensure `browser-data` volume persists (`docker compose down`, NOT `down -v`).
-- After re-login, restart the container once to confirm.
+*"the Canvas page did not answer within Ns"* — the request arrived and nothing
+came back. The tab may be closed, throttled, or the model may be very slow. For
+long generations use `"stream": true`, which applies the timeout between events
+rather than to the whole response, and raise `PROXY_REQUEST_TIMEOUT` if needed.
 
-## Docker: `docker compose exec proxy /app/setup-extension.sh` rejects the ID
+## Streaming produces nothing, then ends
 
-- Chrome extension IDs are exactly 32 chars from `[a-p]`. Copy the full ID from `chrome://extensions`.
+Check the browser console in the Canvas iframe (right-click inside the preview →
+Inspect). The page logs the failed `fetch`. The two common causes are an expired
+key (401) and a model that does not support `streamGenerateContent`.
 
-## Dev: running the tests
+## The container is up but every request 502s
+
+```bash
+docker compose exec proxy curl -s localhost:8765/health
+docker compose exec proxy tail -n 40 /tmp/proxy.log
+docker compose exec proxy ls -l /browser-data/chromium-profile/NativeMessagingHosts
+```
+
+If the manifest directory is empty, `setup-extension.sh` was not run. If it is
+populated but the bridge is still not connected, Chromium has not restarted
+since the manifest was written.
+
+## Login does not survive a container restart
+
+Three things have to hold, and the entrypoint checks two of them at boot:
+
+- the managed policy at `/etc/chromium/policies/managed/gemini-proxy-signin.json`
+  exists (the entrypoint warns if not);
+- `/browser-data` is a persistent volume, not `down -v`'d;
+- Chromium started with `--password-store=basic` (it does).
+
+If all three hold and the login still drops, look at
+`docker compose exec proxy tail -50 /tmp/chromium.log` for a profile-write
+failure — usually a host bind mount owned by a different UID.
+
+## `setup-extension.sh` rejects the ID
+
+Extension IDs are exactly 32 characters, all in `a`–`p`. Copy it again from
+`chrome://extensions`; a partial selection is the usual mistake.
+
+## Diagnosing from the command line
+
+```bash
+# is the process up, and does it have a bridge?
+curl -s http://127.0.0.1:8765/health | python3 -m json.tool
+
+# full status, including config and in-flight count
+curl -s -H "Authorization: Bearer $(cat native_host/.proxy_token)" \
+     http://127.0.0.1:8765/status | python3 -m json.tool
+
+# is anything listening?
+ss -tlnp | grep 8765
+
+# bare metal: is the host process alive?
+pgrep -af gemini_proxy
+
+# docker: proxy stderr, Chromium stderr
+docker compose logs -f proxy
+docker compose exec proxy tail -n 50 /tmp/chromium.log
+```
+
+## Tests
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-The suite is stdlib-only (no third-party deps) and runs in CI on every push/PR.
+Stdlib only, no network, no browser. They cover translation, the HTTP surface,
+streaming, error shapes and chunk reassembly; they do not cover anything that
+needs Chrome.
 
----
+## Known limits
 
-## Limitations
-
-- **Canvas tab must stay open** — closing it kills the proxy
-- **Model-scoped key** — only the currently promoted model works
-- **Large payloads** — >900 KB requests are chunked below Chrome's 1 MB native-messaging cap (byte-accurate base64 reassembly)
-- **No real streaming** — responses are buffered then sent as a single SSE chunk (but `tool_calls` are correctly emitted with proper `finish_reason`)
-- **ToS risk** — using Canvas credentials outside Canvas may violate Google's Terms of Service
-- **Tool calling** — native Gemini function calling with `thoughtSignature` for history; schemas auto-sanitized for Gemini compatibility
+- The Canvas tab must stay open. The credential lives in that page.
+- The key is scoped to one model at a time.
+- One request in flight per Canvas page. Concurrency comes from having more
+  tabs, not from the proxy.
+- `n > 1`, `logprobs` and `top_logprobs` are accepted and ignored.
+- Driving Canvas from outside the page is outside Google's terms.
