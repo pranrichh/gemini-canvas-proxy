@@ -9,12 +9,19 @@ permissions:
 
 jobs:
   unittest:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         # 3.8 is the documented floor, 3.12 is what the container ships.
-        python-version: ["3.8", "3.12"]
+        # 3.8 is only in the toolcache on the older images: ubuntu-latest moved
+        # to 26.04, which no longer offers it, so that leg failed on setup
+        # rather than on a test.
+        include:
+          - python-version: "3.8"
+            os: ubuntu-22.04
+          - python-version: "3.12"
+            os: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
