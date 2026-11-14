@@ -640,15 +640,12 @@ function renderSummary() {
   // contain the declaration exactly once — anything that repeats it verbatim
   // makes the substitution ambiguous and Canvas declines to make it.
   const keyLine = el('keyline');
-  const rewritten = sourceHasInjectedKey();
   if (apiKey) {
     keyLine.dataset.state = 'ok';
-    keyLine.textContent = 'API key: ' + apiKey.length + ' characters, source rewritten: '
-      + (rewritten ? 'yes' : 'no');
+    keyLine.textContent = 'Credentials: key in page (' + apiKey.length + ' characters)';
   } else {
-    keyLine.dataset.state = 'missing';
-    keyLine.textContent = 'API key: empty · served source rewritten: '
-      + (rewritten ? 'yes (but the variable is empty)' : 'no');
+    keyLine.dataset.state = 'ok';
+    keyLine.textContent = 'Credentials: supplied by Canvas at request time';
   }
 }
 
@@ -734,6 +731,10 @@ function buildUrl(path, stream) {
   if (url.protocol !== 'https:' || url.hostname !== 'generativelanguage.googleapis.com') {
     throw new Error('refusing to call a non-Gemini destination');
   }
+  // The key is optional. When Canvas substitutes one into the declaration above
+  // we use it; when it does not, the request goes out without a key and Canvas
+  // authenticates it at its own boundary. Treating an empty key as an error
+  // breaks the normal case.
   if (apiKey) url.searchParams.set('key', apiKey);
   if (stream) url.searchParams.set('alt', 'sse');
   return url.toString();
@@ -964,16 +965,6 @@ async function handleRequest(message) {
 
   if (typeof path !== 'string' || !API_PATH.test(path) || path.includes('..')) {
     fail(id, 'Rejected an unexpected API path', path);
-    return;
-  }
-
-  if (!apiKey) {
-    fail(
-      id,
-      'Canvas did not inject an API key',
-      'The apiKey declaration must be present, unmodified, and the only copy of itself in the file. '
-      + 'Re-paste this page into Canvas.'
-    );
     return;
   }
 
