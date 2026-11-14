@@ -226,6 +226,23 @@ async function storeChunk(message) {
  * Reassemble a chunked request. Returns the original request object, or null
  * when more chunks are still outstanding.
  */
+/**
+ * Chunk assembly is a read-modify-write against chrome.storage.session, so two
+ * chunks arriving in the same tick both read the same buffer and the later
+ * write erases the earlier index. That loses exactly one chunk, the set never
+ * completes, and the transfer dies of old age ninety seconds later with
+ * "incomplete chunk transfer expired" — intermittently, depending on timing.
+ *
+ * One chain, so each chunk lands before the next one is read.
+ */
+let chunkChain = Promise.resolve();
+
+function queueChunk(message) {
+  const next = chunkChain.then(() => reassembleIfComplete(message));
+  chunkChain = next.catch(() => null);
+  return next;
+}
+
 async function reassembleIfComplete(message) {
   const { key, buffer } = await storeChunk(message);
   const received = buffer.chunks.filter((chunk) => chunk !== undefined).length;
@@ -282,7 +299,7 @@ async function handleApiRequest(message) {
 
   if (message.type === 'api_request_chunk') {
     try {
-      request = await reassembleIfComplete(message);
+      request = await queueChunk(message);
     } catch (error) {
       console.error('[proxy] chunk reassembly failed:', error);
       respondError(message.id, error.message);

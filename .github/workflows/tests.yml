@@ -54,6 +54,11 @@ jobs:
       - name: Check response delivery
         run: node tests/extension/response-delivery.js
 
+      # Two chunks arriving in the same tick must not erase each other. This is
+      # the race that made large requests fail intermittently.
+      - name: Check chunk assembly
+        run: node tests/extension/chunk-race.js
+
   docs:
     runs-on: ubuntu-latest
     steps:
