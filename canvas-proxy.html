@@ -198,6 +198,19 @@
     font-family: var(--mono);
   }
 
+  .boot-error {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--bad);
+    background: rgba(248, 81, 73, 0.07);
+    border: 1px solid rgba(248, 81, 73, 0.3);
+    border-radius: 6px;
+    white-space: pre-wrap;
+  }
+
   .keyline[data-state="ok"] { color: var(--muted); }
   .keyline[data-state="missing"] { color: var(--warn); }
 
@@ -427,6 +440,7 @@
   </section>
 
   <p class="keyline" id="keyline"></p>
+  <p class="boot-error" id="boot-error" hidden></p>
 
   <section class="metrics" aria-label="Session metrics">
     <div class="metric">
@@ -498,6 +512,17 @@ const FINISH_REASONS = {
   IMAGE_SAFETY: 'content_filter',
   LANGUAGE: 'content_filter'
 };
+
+// Surface build-time damage. Canvas transforms this script before serving it,
+// and a bad transform throws at load, which used to leave a page that looked
+// fine and simply never connected.
+window.addEventListener('error', function (event) {
+  const box = document.getElementById('boot-error');
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = 'Script error: ' + (event.message || 'unknown')
+    + (event.lineno ? ' (line ' + event.lineno + ')' : '');
+});
 
 const el = (id) => document.getElementById(id);
 const nodes = {
@@ -1093,10 +1118,16 @@ nodes.clear.addEventListener('click', () => {
   renderMetrics();
 });
 
-renderSummary();
-renderMetrics();
-handshake();
-startHeartbeat();
+// Transport first, rendering second, each step isolated. Canvas runs this
+// through its own bundler, and a build-time identifier rewrite can leave a
+// reference that throws on load — one such error previously aborted the whole
+// script, which meant the relay never bound and every request reported "not
+// connected" for what was really a rendering bug. Nothing in the UI is
+// important enough to take the transport down with it.
+try { handshake(); } catch (error) { console.error('[proxy] handshake', error); }
+try { startHeartbeat(); } catch (error) { console.error('[proxy] heartbeat', error); }
+try { renderSummary(); } catch (error) { console.error('[proxy] summary', error); }
+try { renderMetrics(); } catch (error) { console.error('[proxy] metrics', error); }
 </script>
 </body>
 </html>
