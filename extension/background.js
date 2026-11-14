@@ -1,391 +1,401 @@
 /**
- * background.js — Service Worker
+ * Service worker.
  *
- * Routes messages between the native messaging host (Python HTTP server)
- * and the content script (which relays to the Canvas iframe).
+ * Three things live here: the native-messaging port, the routing table for
+ * in-flight requests, and the chunk buffers that let a >1 MiB request cross
+ * Chrome's native-messaging frame limit.
  *
- * Architecture:
- *   Native Host (Python :8765)
- *       ↕ stdio (4-byte length + JSON)
- *   This service worker
- *       ↕ chrome.tabs.sendMessage
- *   Content script (in top-level Gemini page)
- *       ↕ MessageChannel
- *   Canvas iframe (proxy page with free Gemini API key)
- *
- * The native host connects via chrome.runtime.connectNative().
- * Chrome starts the Python process and keeps it alive while the
- * port is open. If the Python process dies, we reconnect after 2s.
- *
- * Tab discovery: We look for tabs on the exact Gemini origin. We
- * also listen for page_ready messages from the content script, which
- * fires when the Canvas proxy page loads.
- *
- * MV3 state: canvas-tab selection and partial chunk buffers live in
- * chrome.storage.session so they survive service-worker suspension.
+ * The subtle part is state. Manifest V3 suspends service workers whenever it
+ * feels like it, so anything that must outlive a suspension goes in
+ * chrome.storage.session. The native port itself cannot be persisted — Chrome
+ * kills the host process when the worker dies — so "connected" is never
+ * assumed. It is only true between the host's own `host_ready` message and the
+ * port's `onDisconnect`.
  */
 
-let nativePort = null;
-let requestHandlingQueue = Promise.resolve();
+const PROTOCOL_VERSION = 2;
 
 const CANVAS_STATE_KEY = 'canvasState';
 const CHUNK_KEY_PREFIX = 'chunkBuffer:';
 const CHUNK_TTL_MS = 90_000;
 const CHUNK_SWEEP_ALARM = 'chunk-buffer-ttl-sweep';
+const RECONNECT_DELAY_MS = 2_000;
+
+let nativePort = null;
+/** True only after the host says `host_ready`; a Port object proves nothing. */
+let hostReady = false;
+let hostProtocol = 0;
+/** The HTTP port the host reports in `host_ready`; shown in the Canvas page. */
+let hostPort = 0;
+
+/**
+ * Mirrors chrome.storage.session so the hot path can answer a status question
+ * without awaiting storage on every message. Kept in sync by setCanvasState().
+ */
+let activeTabId = null;
+
+// ── Canvas tab state ────────────────────────────────────────────────────────
 
 function isGeminiUrl(url) {
-    try {
-        return new URL(url).origin === 'https://gemini.google.com';
-    } catch (e) {
-        return false;
-    }
+  try {
+    return new URL(url).origin === 'https://gemini.google.com';
+  } catch {
+    return false;
+  }
 }
 
 async function getCanvasState() {
-    const stored = await chrome.storage.session.get(CANVAS_STATE_KEY);
-    return stored[CANVAS_STATE_KEY] || { tabId: null, ready: false };
+  const stored = await chrome.storage.session.get(CANVAS_STATE_KEY);
+  const state = stored[CANVAS_STATE_KEY] || { tabId: null, ready: false };
+  activeTabId = state.tabId;
+  return state;
 }
 
 async function setCanvasState(tabId, ready) {
-    await chrome.storage.session.set({
-        [CANVAS_STATE_KEY]: { tabId, ready: Boolean(ready) }
-    });
+  activeTabId = tabId;
+  await chrome.storage.session.set({
+    [CANVAS_STATE_KEY]: { tabId, ready: Boolean(ready) }
+  });
 }
 
-// ── Native messaging host connection ─────────────────────────────────────────
+// ── Native messaging ────────────────────────────────────────────────────────
 
 function connectNative() {
-    if (nativePort) return;
+  if (nativePort) return;
 
-    try {
-        nativePort = chrome.runtime.connectNative('com.gemini.proxy');
-        console.log('[Proxy] Connected to native host');
-    } catch (e) {
-        console.error('[Proxy] Failed to connect to native host:', e);
-        setTimeout(connectNative, 2000);
-        return;
+  try {
+    nativePort = chrome.runtime.connectNative('com.gemini.proxy');
+  } catch (error) {
+    console.error('[proxy] connectNative threw:', error);
+    hostReady = false;
+    setTimeout(connectNative, RECONNECT_DELAY_MS);
+    return;
+  }
+
+  nativePort.onMessage.addListener(onNativeMessage);
+
+  nativePort.onDisconnect.addListener(() => {
+    const reason = chrome.runtime.lastError?.message;
+    console.warn('[proxy] native host disconnected' + (reason ? ': ' + reason : ''));
+    nativePort = null;
+    // A host that failed to launch never sent host_ready, so the broadcast is
+    // already correct; a host that died mid-session needs the transition.
+    if (hostReady) broadcastBridgeState(false);
+    hostReady = false;
+    hostProtocol = 0;
+    hostPort = 0;
+    setTimeout(connectNative, RECONNECT_DELAY_MS);
+  });
+}
+
+function onNativeMessage(message) {
+  if (message.type === 'host_ready') {
+    hostReady = true;
+    hostProtocol = message.protocol || 0;
+    hostPort = message.port || 0;
+    if (hostProtocol !== PROTOCOL_VERSION) {
+      console.warn(
+        `[proxy] protocol mismatch: host speaks ${hostProtocol}, extension speaks ${PROTOCOL_VERSION}. Reload the extension.`
+      );
     }
-
     broadcastBridgeState(true);
+    return;
+  }
 
-    // Messages from the Python HTTP server
-    nativePort.onMessage.addListener((msg) => {
-        if (msg.type === 'api_request' || msg.type === 'api_request_chunk') {
-            requestHandlingQueue = requestHandlingQueue
-                .then(() => handleApiRequest(msg))
-                .catch((error) => {
-                    console.error('[Proxy] Request handling failed:', error);
-                    if (nativePort) {
-                        nativePort.postMessage({
-                            type: 'api_response',
-                            id: msg.id,
-                            error: 'Extension request handling failed'
-                        });
-                    }
-                });
-        }
+  if (message.type === 'api_request' || message.type === 'api_request_chunk') {
+    handleApiRequest(message).catch((error) => {
+      console.error('[proxy] request failed:', error);
+      respondError(message.id, 'Extension could not handle the request: ' + error.message);
     });
-
-    // Python process died — reconnect
-    nativePort.onDisconnect.addListener(() => {
-        console.warn('[Proxy] Native host disconnected, reconnecting...');
-        nativePort = null;
-        broadcastBridgeState(false);
-        setTimeout(connectNative, 2000);
-    });
+  }
 }
 
-// Tell every Gemini tab (via content scripts) whether the native host is
-// connected, so the Canvas page can show an honest online/offline status.
+function postToHost(message) {
+  if (!nativePort) return false;
+  try {
+    nativePort.postMessage(message);
+    return true;
+  } catch (error) {
+    console.error('[proxy] postMessage to host failed:', error);
+    return false;
+  }
+}
+
+function respondError(id, error) {
+  postToHost({ type: 'api_response', id, error });
+}
+
+/**
+ * Tell every Gemini tab whether the host is genuinely up. Tabs that have not
+ * handshaked yet ignore this; they ask for state themselves when they do.
+ */
 function broadcastBridgeState(connected) {
-    chrome.tabs.query({ url: 'https://gemini.google.com/*' }, (tabs) => {
-        for (const tab of tabs) {
-            chrome.tabs.sendMessage(tab.id, { type: 'bridge_state', connected })
-                .catch(() => {});
-        }
-    });
+  chrome.tabs.query({ url: 'https://gemini.google.com/*' }, (tabs) => {
+    for (const tab of tabs) {
+      chrome.tabs.sendMessage(tab.id, { type: 'bridge_state', connected })
+        .catch(() => { /* tab has no content script; nothing to tell */ });
+    }
+  });
 }
 
-// ── API request forwarding ───────────────────────────────────────────────────
+// ── Chunk reassembly ────────────────────────────────────────────────────────
 
-function decodeBase64Chunks(chunks) {
-    const decoded = chunks.map((chunk) => {
-        const binary = atob(chunk);
-        return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    });
-    const totalBytes = decoded.reduce((total, chunk) => total + chunk.length, 0);
-    const combined = new Uint8Array(totalBytes);
-    let offset = 0;
-    for (const chunk of decoded) {
-        combined.set(chunk, offset);
-        offset += chunk.length;
-    }
-    return {
-        json: new TextDecoder('utf-8', { fatal: true }).decode(combined),
-        byteLength: totalBytes
-    };
+function decodeChunks(chunks) {
+  const parts = chunks.map((chunk) => {
+    const binary = atob(chunk);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  });
+
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const combined = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    combined.set(part, offset);
+    offset += part.length;
+  }
+  return { json: new TextDecoder('utf-8', { fatal: true }).decode(combined), byteLength: total };
 }
 
-async function addChunk(msg) {
-    if (
-        !Number.isInteger(msg.total_chunks)
-        || msg.total_chunks < 1
-        || msg.total_chunks > 128
-        || !Number.isInteger(msg.chunk_index)
-        || msg.chunk_index < 0
-        || msg.chunk_index >= msg.total_chunks
-    ) {
-        throw new Error('Invalid chunk metadata');
-    }
-    if (msg.chunk_encoding !== 'base64') {
-        throw new Error('Unsupported chunk encoding');
-    }
-    const key = CHUNK_KEY_PREFIX + msg.id;
-    const stored = await chrome.storage.session.get(key);
-    const buffer = stored[key] || {
-        chunks: [],
-        total: msg.total_chunks,
-        updatedAt: Date.now()
-    };
+async function storeChunk(message) {
+  const { total_chunks: total, chunk_index: index, chunk_encoding: encoding } = message;
+  if (!Number.isInteger(total) || total < 1 || total > 128) throw new Error('invalid total_chunks');
+  if (!Number.isInteger(index) || index < 0 || index >= total) throw new Error('invalid chunk_index');
+  if (encoding !== 'base64') throw new Error('unsupported chunk encoding');
 
-    if (buffer.total !== msg.total_chunks) {
-        await chrome.storage.session.remove(key);
-        throw new Error('Chunk count changed during transfer');
-    }
+  const key = CHUNK_KEY_PREFIX + message.id;
+  const stored = await chrome.storage.session.get(key);
+  const buffer = stored[key] || { chunks: new Array(total), total, updatedAt: Date.now() };
 
-    buffer.chunks[msg.chunk_index] = msg.chunk_data;
-    buffer.updatedAt = Date.now();
-    await chrome.storage.session.set({ [key]: buffer });
-    return { key, buffer };
+  if (buffer.total !== total) {
+    await chrome.storage.session.remove(key);
+    throw new Error('chunk count changed mid-transfer');
+  }
+
+  buffer.chunks[index] = message.chunk_data;
+  buffer.updatedAt = Date.now();
+  await chrome.storage.session.set({ [key]: buffer });
+  return { key, buffer };
 }
 
-async function handleApiRequest(msg) {
-    // Handle chunked payloads (>1MB native messaging limit)
-    if (msg.type === 'api_request_chunk') {
-        let key, buf;
-        try {
-            ({ key, buffer: buf } = await addChunk(msg));
-        } catch (e) {
-            console.error('[Proxy] Chunk rejected:', e.message);
-            if (nativePort) {
-                nativePort.postMessage({
-                    type: 'api_response',
-                    id: msg.id,
-                    error: e.message
-                });
-            }
-            return;
-        }
+/**
+ * Reassemble a chunked request. Returns the original request object, or null
+ * when more chunks are still outstanding.
+ */
+async function reassembleIfComplete(message) {
+  const { key, buffer } = await storeChunk(message);
+  const received = buffer.chunks.filter((chunk) => chunk !== undefined).length;
+  if (received < buffer.total) return null;
 
-        // Check if all chunks received
-        const received = buf.chunks.filter(c => c !== undefined).length;
-        console.log(`[Proxy] Chunk ${msg.chunk_index + 1}/${msg.total_chunks} received (${received}/${buf.total})`);
-
-        if (received < buf.total) return; // Wait for more chunks
-
-        // All chunks received — reassemble
-        await chrome.storage.session.remove(key);
-
-        try {
-            const reassembled = decodeBase64Chunks(buf.chunks);
-            console.log('[Proxy] All chunks reassembled, size:', reassembled.byteLength, 'bytes');
-            msg = JSON.parse(reassembled.json);
-        } catch (e) {
-            console.error('[Proxy] Failed to parse reassembled payload:', e);
-            if (nativePort) {
-                nativePort.postMessage({ type: 'api_response', id: msg.id, error: 'Chunk reassembly parse failed' });
-            }
-            return;
-        }
-    }
-
-    // Prefer a tab that completed page_ready over a passive Gemini tab.
-    let canvasState = await getCanvasState();
-    if (!canvasState.tabId) {
-        await discoverCanvasTab();
-        canvasState = await getCanvasState();
-    }
-
-    if (!canvasState.tabId) {
-        const err = 'No Canvas tab found. Open gemini.google.com, paste proxy HTML in Code view, click Preview.';
-        console.error('[Proxy]', err);
-        if (nativePort) {
-            nativePort.postMessage({ type: 'api_response', id: msg.id, error: err });
-        }
-        return;
-    }
-
-    // Forward the API request to the content script
-    try {
-        await chrome.tabs.sendMessage(canvasState.tabId, {
-            type: 'api_request',
-            id: msg.id,
-            method: msg.method,
-            path: msg.path,
-            body: msg.body,
-            headers: msg.headers || {}
-        });
-    } catch (err) {
-        console.warn('[Proxy] Failed to send to tab:', err.message);
-        if (nativePort) {
-            nativePort.postMessage({
-                type: 'api_response',
-                id: msg.id,
-                error: 'Canvas tab not responding. Make sure proxy HTML is in Canvas Preview. Error: ' + err.message
-            });
-        }
-    }
+  await chrome.storage.session.remove(key);
+  try {
+    return JSON.parse(decodeChunks(buffer.chunks).json);
+  } catch (error) {
+    throw new Error('reassembled payload is not valid UTF-8 JSON: ' + error.message);
+  }
 }
 
-// ── Canvas tab discovery ─────────────────────────────────────────────────────
+async function sweepExpiredChunks() {
+  const stored = await chrome.storage.session.get(null);
+  const now = Date.now();
+  const expired = Object.entries(stored).filter(([key, value]) => (
+    key.startsWith(CHUNK_KEY_PREFIX) && value && now - value.updatedAt >= CHUNK_TTL_MS
+  ));
+  if (!expired.length) return;
+
+  await chrome.storage.session.remove(expired.map(([key]) => key));
+  for (const [key] of expired) {
+    respondError(key.slice(CHUNK_KEY_PREFIX.length), 'incomplete chunk transfer expired');
+  }
+}
+
+// ── Request routing ─────────────────────────────────────────────────────────
 
 async function discoverCanvasTab() {
-    const existing = await getCanvasState();
-    if (existing.ready && existing.tabId) {
-        try {
-            const tab = await chrome.tabs.get(existing.tabId);
-            if (isGeminiUrl(tab.url)) return existing.tabId;
-        } catch (e) {
-            // The ready tab no longer exists; continue discovery.
-        }
-    }
+  const state = await getCanvasState();
 
-    const tabs = await chrome.tabs.query({});
-    const tab = tabs.find((candidate) => isGeminiUrl(candidate.url));
-    if (tab) {
-        await setCanvasState(tab.id, false);
-        console.log('[Proxy] Found Gemini tab:', tab.id, tab.url.substring(0, 60));
-        return tab.id;
+  if (state.tabId) {
+    try {
+      const tab = await chrome.tabs.get(state.tabId);
+      if (isGeminiUrl(tab.url)) return state.tabId;
+    } catch {
+      // Tab is gone; fall through to a fresh lookup.
     }
+  }
 
-    console.warn('[Proxy] No Gemini tab found among', tabs.length, 'tabs');
+  const tabs = await chrome.tabs.query({ url: 'https://gemini.google.com/*' });
+  if (!tabs.length) {
     await setCanvasState(null, false);
     return null;
+  }
+
+  await setCanvasState(tabs[0].id, false);
+  return tabs[0].id;
 }
 
-// ── Message listeners (from content script) ──────────────────────────────────
+async function handleApiRequest(message) {
+  let request = message;
+
+  if (message.type === 'api_request_chunk') {
+    try {
+      request = await reassembleIfComplete(message);
+    } catch (error) {
+      console.error('[proxy] chunk reassembly failed:', error);
+      respondError(message.id, error.message);
+      return;
+    }
+    if (request === null) return; // still waiting on more chunks
+  }
+
+  const tabId = await discoverCanvasTab();
+  if (!tabId) {
+    respondError(
+      request.id,
+      'No Gemini tab found. Open gemini.google.com and put the proxy HTML in Canvas Preview.'
+    );
+    return;
+  }
+
+  let reply;
+  try {
+    reply = await chrome.tabs.sendMessage(tabId, {
+      type: 'api_request',
+      id: request.id,
+      method: request.method,
+      path: request.path,
+      body: request.body,
+      headers: request.headers || {},
+      stream: Boolean(request.stream),
+      streamOptions: request.stream_options || {}
+    });
+  } catch (error) {
+    // No content script in that tab at all — usually a page that has not
+    // finished loading, or one open before the extension was installed.
+    await setCanvasState(tabId, false);
+    respondError(
+      request.id,
+      'Gemini tab is not accepting messages yet (' + error.message + '). Reload the tab.'
+    );
+    return;
+  }
+
+  if (!reply || !reply.ok) {
+    const reason = (reply && reply.reason) ||
+      'Canvas page is not connected. Put the proxy HTML in Canvas Preview.';
+    respondError(request.id, reason);
+  }
+}
+
+// ── Content-script messages ─────────────────────────────────────────────────
 
 function isTrustedGeminiSender(sender) {
-    if (!sender.tab || !Number.isInteger(sender.tab.id) || !sender.url) return false;
-    try {
-        return new URL(sender.url).origin === 'https://gemini.google.com';
-    } catch (e) {
-        return false;
-    }
+  if (!sender.tab || !Number.isInteger(sender.tab.id) || !sender.url) return false;
+  try {
+    return new URL(sender.url).origin === 'https://gemini.google.com';
+  } catch {
+    return false;
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!isTrustedGeminiSender(sender)) {
-        console.warn('[Proxy] Rejected message from untrusted sender');
-        sendResponse({ ok: false, error: 'Untrusted sender' });
+  if (!isTrustedGeminiSender(sender)) {
+    sendResponse({ ok: false, reason: 'untrusted sender' });
+    return false;
+  }
+
+  switch (message.type) {
+    case 'page_ready':
+      setCanvasState(sender.tab.id, true)
+        .then(() => {
+          console.log('[proxy] canvas page ready in tab', sender.tab.id);
+          sendResponse({
+            ok: true, nativeConnected: hostReady, protocol: hostProtocol, port: hostPort
+          });
+        })
+        .catch((error) => sendResponse({ ok: false, reason: error.message }));
+      return true;
+
+    case 'bridge_state_request':
+      sendResponse({
+        ok: true, nativeConnected: hostReady, protocol: hostProtocol, port: hostPort
+      });
+      return false;
+
+    case 'api_response': {
+      // Only the tab we route to may answer, otherwise a stale tab could
+      // inject results into someone else's request.
+      if (sender.tab.id !== activeTabId) {
+        sendResponse({ ok: false, reason: 'inactive Gemini tab' });
         return false;
+      }
+      const delivered = postToHost({
+        type: 'api_response',
+        id: message.id,
+        status: message.status,
+        data: message.data,
+        error: message.error
+      });
+      sendResponse({ ok: delivered });
+      return false;
     }
 
-    if (message.type === 'page_ready') {
-        (async () => {
-            await setCanvasState(sender.tab.id, true);
-            console.log('[Proxy] Canvas proxy page ready, tab:', sender.tab.id);
-            if (nativePort) {
-                nativePort.postMessage({ type: 'page_ready', tabId: sender.tab.id });
-            }
-            sendResponse({ ok: true });
-        })().catch((error) => {
-            console.error('[Proxy] Failed to persist ready tab:', error);
-            sendResponse({ ok: false, error: error.message });
-        });
-        return true;
+    case 'api_stream_event': {
+      if (sender.tab.id !== activeTabId) {
+        sendResponse({ ok: false, reason: 'inactive Gemini tab' });
+        return false;
+      }
+      // Forwarded synchronously: ordering between deltas is the whole point
+      // of a stream, and an await here would let them interleave.
+      const delivered = postToHost({
+        type: 'api_stream_event',
+        id: message.id,
+        event: message.event,
+        text: message.text,
+        tool_call: message.tool_call,
+        finish_reason: message.finish_reason,
+        usage: message.usage,
+        error: message.error
+      });
+      sendResponse({ ok: delivered });
+      return false;
     }
 
-    if (message.type === 'api_response') {
-        (async () => {
-            const state = await getCanvasState();
-            if (sender.tab.id !== state.tabId) {
-                console.warn('[Proxy] Rejected response from inactive Gemini tab');
-                sendResponse({ ok: false, error: 'Inactive Gemini tab' });
-                return;
-            }
-            if (nativePort) {
-                nativePort.postMessage({
-                    type: 'api_response',
-                    id: message.id,
-                    status: message.status,
-                    data: message.data,
-                    error: message.error
-                });
-            }
-            sendResponse({ ok: true });
-        })().catch((error) => {
-            console.error('[Proxy] api_response handling failed:', error);
-            sendResponse({ ok: false, error: error.message });
-        });
-        return true;
-    }
-
-    return true; // Keep message channel open for async responses
+    default:
+      sendResponse({ ok: false, reason: 'unknown message type' });
+      return false;
+  }
 });
 
-// ── Tab lifecycle tracking ───────────────────────────────────────────────────
+// ── Tab lifecycle ───────────────────────────────────────────────────────────
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (!tab.url) return;
-    (async () => {
-        const state = await getCanvasState();
-        if (isGeminiUrl(tab.url)) {
-            if (!state.ready && !state.tabId) {
-                await setCanvasState(tabId, false);
-            }
-        } else if (tabId === state.tabId) {
-            await setCanvasState(null, false);
-        }
-    })().catch((error) => console.error('[Proxy] Tab update failed:', error));
+  if (tabId !== activeTabId) return;
+  // `loading` covers reloads and in-tab navigation. Either way the Canvas
+  // page that was serving requests no longer exists.
+  if (changeInfo.status === 'loading') {
+    setCanvasState(tabId, false).catch(() => {});
+  } else if (tab.url && !isGeminiUrl(tab.url)) {
+    setCanvasState(null, false).catch(() => {});
+  }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-    (async () => {
-        const state = await getCanvasState();
-        if (tabId === state.tabId) {
-            console.log('[Proxy] Canvas tab closed');
-            await setCanvasState(null, false);
-        }
-    })().catch((error) => console.error('[Proxy] Tab removal failed:', error));
+  if (tabId === activeTabId) {
+    console.log('[proxy] canvas tab closed');
+    setCanvasState(null, false).catch(() => {});
+  }
 });
-
-async function sweepExpiredChunks() {
-    const stored = await chrome.storage.session.get(null);
-    const now = Date.now();
-    const expired = Object.entries(stored).filter(([key, value]) => (
-        key.startsWith(CHUNK_KEY_PREFIX)
-        && value
-        && now - value.updatedAt >= CHUNK_TTL_MS
-    ));
-
-    if (!expired.length) return;
-    await chrome.storage.session.remove(expired.map(([key]) => key));
-    for (const [key] of expired) {
-        const requestId = key.slice(CHUNK_KEY_PREFIX.length);
-        if (nativePort) {
-            nativePort.postMessage({
-                type: 'api_response',
-                id: requestId,
-                error: 'Incomplete chunk transfer expired'
-            });
-        }
-    }
-}
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === CHUNK_SWEEP_ALARM) {
-        sweepExpiredChunks().catch((error) => {
-            console.error('[Proxy] Chunk TTL sweep failed:', error);
-        });
-    }
+  if (alarm.name === CHUNK_SWEEP_ALARM) {
+    sweepExpiredChunks().catch((error) => console.error('[proxy] chunk sweep failed:', error));
+  }
 });
 
-// ── Start ────────────────────────────────────────────────────────────────────
+// ── Start ───────────────────────────────────────────────────────────────────
 
 connectNative();
-discoverCanvasTab();
+getCanvasState().catch(() => {});
 chrome.alarms.create(CHUNK_SWEEP_ALARM, { periodInMinutes: 0.5 });
-sweepExpiredChunks().catch((error) => {
-    console.error('[Proxy] Initial chunk TTL sweep failed:', error);
-});
+sweepExpiredChunks().catch(() => {});

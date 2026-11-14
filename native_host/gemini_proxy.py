@@ -1,120 +1,221 @@
 #!/usr/bin/env python3
 """
-Gemini Canvas Proxy — Native Messaging Host
-============================================
+Gemini Canvas Proxy — native messaging host.
 
-A local HTTP server that exposes an OpenAI-compatible API endpoint,
-backed by free unlimited Gemini inference via Gemini Canvas.
+Serves an OpenAI-compatible HTTP API on localhost and forwards every request
+through Chrome to a Gemini Canvas page, which is where the credentials live.
 
-How it works:
-    1. HTTP server listens on localhost:8765
-    2. Incoming OpenAI-format requests are translated to Gemini format
-    3. Translated requests are sent to the Chrome extension via stdio
-       (Chrome native messaging protocol: 4-byte length + JSON)
-    4. The extension relays them to the Canvas page
-    5. The Canvas page calls the Gemini API with its auto-injected key
-    6. Responses flow back: Canvas → extension → native host → HTTP
+Why three processes' worth of plumbing: Chrome only lets an extension talk to a
+native binary it launched itself. That binary therefore has to be the one
+holding stdio, but the HTTP listener has to survive independently of any single
+browser tab. The roles below split those two responsibilities.
 
-The Canvas internal API key is:
-    - Unlimited (no rate limit, no daily cap)
-    - Model-scoped (only works with the currently promoted model)
-    - Session-bound (dies when the Canvas tab closes)
-    - Auto-injected by Canvas when code contains `apiKey = ""`
+    --http-only     Owns the TCP listener and a Unix socket. Started by the
+                    container entrypoint, or by hand for debugging with a test
+                    bridge. Accepts exactly one bridge connection at a time.
+    --bridge-only   Launched by Chrome through the native-messaging manifest in
+                    the container, where /app is read-only and the HTTP role
+                    already exists. Pumps stdio to the Unix socket.
+    (no flag)       Launched by Chrome on bare metal. Owns stdio *and* serves
+                    HTTP, so a desktop install needs only one process.
 
-Limitations:
-    - The Canvas tab must remain open and its key is model/session scoped.
-    - Native tool calls use Gemini functionCall/functionResponse parts.
-    - Large host-to-extension requests are chunked below Chrome's per-message
-      native messaging limit.
-    - Streaming is simulated after the full Gemini response arrives.
-
-Credits:
-    The postMessage bridge concept was inspired by coxcelot's "I am canceled"
-    autobrowsing agent harness:
-    https://github.com/coxcelot/iamcanceledpresentsagenericautobrowsingagentharness
+Wire format in both directions is Chrome's native messaging framing: a 4-byte
+native-endian length followed by UTF-8 JSON. Chrome caps host-to-browser
+messages at 1 MiB, so anything larger is split into base64 chunks; the
+browser-to-host direction allows 64 MiB and is never chunked.
 """
 
-import struct
-import sys
-import json
-import threading
-import uuid
-import os
+import argparse
 import base64
+import hmac
 import ipaddress
+import json
+import os
+import re
 import socket
 import stat
+import struct
+import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
-import re
-import hmac
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from queue import Empty, Queue
 from socketserver import ThreadingMixIn
-from queue import Queue, Empty
 
+PROTOCOL_VERSION = 2
 
-# ═══════════════════════════════════════════════════════════════════════════
-# THREADED HTTP SERVER
-# ═══════════════════════════════════════════════════════════════════════════
-# CRITICAL: Must be threaded. When a chat request blocks waiting for the
-# extension response (up to 60s), a single-threaded server would block
-# ALL other requests including health checks.
+# Chrome's native messaging limits, in bytes.
+MAX_HOST_TO_BROWSER_BYTES = 1 << 20
+MAX_BROWSER_TO_HOST_BYTES = 64 << 20
 
-class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    """HTTPServer that handles each request in its own thread."""
-    daemon_threads = True
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# NATIVE MESSAGING PROTOCOL
-# ═══════════════════════════════════════════════════════════════════════════
-# Chrome communicates with native hosts via stdin/stdout. Each message is:
-#   [4-byte length (native endian)] [UTF-8 JSON payload]
-# Limits: host→extension = 1MB, extension→host = 64MB
-MAX_NATIVE_MESSAGE_BYTES = 1024 * 1024
-# Base64 adds roughly 33%, so 600 KB raw chunks remain near 800 KB after
-# encoding and leave ample room for the native-message JSON envelope.
+# Base64 inflates by 4/3. 600 KB of raw bytes encodes to 800 KB, leaving room
+# for the JSON envelope inside the 1 MiB frame.
 RAW_CHUNK_BYTES = 600_000
+MAX_CHUNKS = 128
+
+# Chunking is the only way to move a large request host -> browser, so the
+# request ceiling cannot exceed what MAX_CHUNKS can carry.
+MAX_CHUNKED_REQUEST_BYTES = RAW_CHUNK_BYTES * MAX_CHUNKS
+
+DEFAULT_PORT = 8765
+DEFAULT_REQUEST_TIMEOUT = 180.0
+DEFAULT_MAX_REQUEST_BYTES = 32 << 20
+DEFAULT_TOOL_RESULT_CHARS = 5_000
+DEFAULT_MAX_IMAGE_BYTES = 20 << 20
+
+MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+GEMINI_PATH_PATTERN = re.compile(
+    r"^/v1beta/models/([A-Za-z0-9._-]+):(generateContent|streamGenerateContent)$"
+)
+
+FINISH_REASON_MAP = {
+    "STOP": "stop",
+    "MAX_TOKENS": "length",
+    "SAFETY": "content_filter",
+    "RECITATION": "content_filter",
+    "BLOCKLIST": "content_filter",
+    "PROHIBITED_CONTENT": "content_filter",
+    "SPII": "content_filter",
+    "IMAGE_SAFETY": "content_filter",
+    "LANGUAGE": "content_filter",
+    "OTHER": "stop",
+    "MALFORMED_FUNCTION_CALL": "stop",
+    "UNEXPECTED_TOOL_CALL": "stop",
+}
+
+# Gemini's functionDeclarations accept a strict subset of JSON Schema. Sending
+# anything else produces MALFORMED_FUNCTION_CALL, which surfaces to the caller
+# as an empty response — the least debuggable failure mode Gemini has.
+UNSUPPORTED_SCHEMA_KEYS = frozenset({
+    "$schema", "$id", "$ref", "$defs", "$comment",
+    "additionalProperties", "unevaluatedProperties", "unevaluatedItems",
+    "patternProperties", "dependentRequired", "dependentSchemas",
+    "propertyNames", "contentMediaType", "contentEncoding",
+    "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
+    "const", "examples", "default", "nullable", "title", "deprecated",
+    "readOnly", "writeOnly",
+    "maxLength", "minLength", "pattern", "format",
+    "maxItems", "minItems", "uniqueItems", "contains", "minContains", "maxContains",
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+})
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Logging
+# ───────────────────────────────────────────────────────────────────────────
+# Everything goes to stderr. On stdout, a stray print would be read by Chrome
+# as a malformed native message and tear down the port.
+
+def log(message, *args):
+    if args:
+        message = message % args
+    sys.stderr.write("[proxy] %s\n" % message)
+    sys.stderr.flush()
+
+
+def warn(message, *args):
+    log("WARN " + (message % args if args else message))
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Configuration
+# ───────────────────────────────────────────────────────────────────────────
+
+class ConfigError(RuntimeError):
+    """An environment variable is present but unusable."""
+
+
+def env_int(name, default, minimum=None, maximum=None):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigError("%s must be an integer, got %r" % (name, raw))
+    if minimum is not None and value < minimum:
+        raise ConfigError("%s must be >= %s, got %s" % (name, minimum, value))
+    if maximum is not None and value > maximum:
+        raise ConfigError("%s must be <= %s, got %s" % (name, maximum, value))
+    return value
+
+
+def env_float(name, default, minimum=None):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ConfigError("%s must be a number, got %r" % (name, raw))
+    if minimum is not None and value < minimum:
+        raise ConfigError("%s must be >= %s, got %s" % (name, minimum, value))
+    return value
+
+
+def env_flag(name):
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def token_file_path():
+    return os.environ.get(
+        "PROXY_TOKEN_FILE",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".proxy_token"),
+    )
+
+
+def load_proxy_token():
+    """Bearer token from the environment, falling back to the 0600 token file."""
+    token = os.environ.get("PROXY_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        with open(token_file_path(), "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Native messaging framing
+# ───────────────────────────────────────────────────────────────────────────
 
 def read_message():
-    """Read a single framed JSON message from Chrome's stdin."""
-    raw = sys.stdin.buffer.read(4)
-    if not raw or len(raw) < 4:
+    """Read one framed message from stdin. Returns None at end of stream."""
+    header = sys.stdin.buffer.read(4)
+    if len(header) < 4:
         return None
-    length = struct.unpack('=I', raw)[0]
+    (length,) = struct.unpack("=I", header)
     if length == 0:
         return None
-    return json.loads(sys.stdin.buffer.read(length).decode('utf-8'))
-
-
-def send_message(msg):
-    """Send a framed JSON message to Chrome's stdout."""
-    encoded = json.dumps(msg, separators=(',', ':')).encode('utf-8')
-    if len(encoded) > MAX_NATIVE_MESSAGE_BYTES:
+    if length > MAX_BROWSER_TO_HOST_BYTES:
         raise ValueError(
-            f"Native message is {len(encoded)} bytes; limit is "
-            f"{MAX_NATIVE_MESSAGE_BYTES}"
+            "native message claims %d bytes, above the %d-byte limit"
+            % (length, MAX_BROWSER_TO_HOST_BYTES)
         )
-    sys.stdout.buffer.write(struct.pack('=I', len(encoded)))
+    payload = sys.stdin.buffer.read(length)
+    if len(payload) < length:
+        return None
+    return json.loads(payload.decode("utf-8"))
+
+
+def send_message(message):
+    """Write one framed message to stdout without exceeding Chrome's limit."""
+    encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > MAX_HOST_TO_BROWSER_BYTES:
+        raise ValueError(
+            "native message is %d bytes, above the %d-byte limit"
+            % (len(encoded), MAX_HOST_TO_BROWSER_BYTES)
+        )
+    sys.stdout.buffer.write(struct.pack("=I", len(encoded)))
     sys.stdout.buffer.write(encoded)
     sys.stdout.buffer.flush()
 
 
-def _read_socket_message(connection):
-    header = _recv_exact(connection, 4)
-    if header is None:
-        return None
-    length = struct.unpack('=I', header)[0]
-    if length == 0:
-        return None
-    payload = _recv_exact(connection, length)
-    if payload is None:
-        return None
-    return json.loads(payload.decode('utf-8'))
-
-
-def _recv_exact(connection, length):
+def recv_exact(connection, length):
     chunks = []
     remaining = length
     while remaining:
@@ -123,81 +224,134 @@ def _recv_exact(connection, length):
             return None
         chunks.append(chunk)
         remaining -= len(chunk)
-    return b''.join(chunks)
+    return b"".join(chunks)
 
 
-def _write_socket_message(connection, msg):
-    encoded = json.dumps(msg, separators=(',', ':')).encode('utf-8')
-    connection.sendall(struct.pack('=I', len(encoded)) + encoded)
+def read_socket_message(connection):
+    header = recv_exact(connection, 4)
+    if header is None:
+        return None
+    (length,) = struct.unpack("=I", header)
+    if length == 0:
+        return None
+    if length > MAX_BROWSER_TO_HOST_BYTES:
+        raise ValueError("unix-socket frame too large: %d bytes" % length)
+    payload = recv_exact(connection, length)
+    if payload is None:
+        return None
+    return json.loads(payload.decode("utf-8"))
 
 
-def _chunk_native_payload(serialized, request_id):
-    """Split encoded JSON bytes into base64 native-message envelopes."""
-    chunks = [
+def write_socket_message(connection, message):
+    encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
+    connection.sendall(struct.pack("=I", len(encoded)) + encoded)
+
+
+def chunk_request(serialized, request_id):
+    """Split a serialized request into base64 native-message envelopes."""
+    pieces = [
         serialized[offset:offset + RAW_CHUNK_BYTES]
         for offset in range(0, len(serialized), RAW_CHUNK_BYTES)
     ]
-    total_chunks = len(chunks)
+    if len(pieces) > MAX_CHUNKS:
+        raise ValueError(
+            "request needs %d native messages, above the %d limit; "
+            "lower PROXY_MAX_REQUEST_BYTES"
+            % (len(pieces), MAX_CHUNKS)
+        )
+
     messages = []
-    for index, chunk in enumerate(chunks):
+    for index, piece in enumerate(pieces):
         message = {
             "type": "api_request_chunk",
             "id": request_id,
             "chunk_index": index,
-            "total_chunks": total_chunks,
+            "total_chunks": len(pieces),
             "chunk_encoding": "base64",
-            "chunk_data": base64.b64encode(chunk).decode('ascii')
+            "chunk_data": base64.b64encode(piece).decode("ascii"),
         }
-        encoded_length = len(json.dumps(
-            message,
-            separators=(',', ':')
-        ).encode('utf-8'))
-        if encoded_length > MAX_NATIVE_MESSAGE_BYTES:
-            raise ValueError(
-                f"Chunk message is {encoded_length} bytes; limit is "
-                f"{MAX_NATIVE_MESSAGE_BYTES}"
-            )
+        size = len(json.dumps(message, separators=(",", ":")).encode("utf-8"))
+        if size > MAX_HOST_TO_BROWSER_BYTES:
+            raise ValueError("chunk envelope is %d bytes, above the limit" % size)
         messages.append(message)
     return messages
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# REQUEST TRACKING
-# ═══════════════════════════════════════════════════════════════════════════
+# ───────────────────────────────────────────────────────────────────────────
+# Bridge routing
+# ───────────────────────────────────────────────────────────────────────────
+# Each in-flight HTTP request owns a Queue. The bridge reader thread pushes
+# events into the matching queue and never blocks on a slow client.
 
-pending_requests = {}  # request_id → Queue (for matching responses to requests)
+pending_requests = {}
+pending_lock = threading.Lock()
 bridge_connection = None
-bridge_connection_lock = threading.Lock()
+bridge_connected_at = None
+bridge_lock = threading.Lock()
 outbound_sender = send_message
 
 
-def _route_bridge_response(msg):
-    if msg.get('type') != 'api_response':
+def register_request(request_id):
+    queue = Queue()
+    with pending_lock:
+        pending_requests[request_id] = queue
+    return queue
+
+
+def unregister_request(request_id):
+    with pending_lock:
+        pending_requests.pop(request_id, None)
+
+
+def route_bridge_message(message):
+    message_type = message.get("type")
+    request_id = message.get("id")
+    if not request_id:
         return
-    req_id = msg.get('id')
-    if req_id in pending_requests:
-        pending_requests[req_id].put({
-            "status": msg.get('status'),
-            "data": msg.get('data'),
-            "error": msg.get('error')
+    with pending_lock:
+        queue = pending_requests.get(request_id)
+    if queue is None:
+        # The HTTP client already gave up. Dropping is correct: there is
+        # nobody left to deliver to, and the extension should not retry.
+        return
+
+    if message_type == "api_response":
+        queue.put({
+            "kind": "response",
+            "status": message.get("status", 200),
+            "data": message.get("data"),
+            "error": message.get("error"),
+        })
+    elif message_type == "api_stream_event":
+        queue.put({
+            "kind": "stream",
+            "event": message.get("event"),
+            "text": message.get("text"),
+            "tool_call": message.get("tool_call"),
+            "finish_reason": message.get("finish_reason"),
+            "usage": message.get("usage"),
+            "error": message.get("error"),
         })
 
 
-def _send_to_bridge_socket(msg):
-    with bridge_connection_lock:
-        if bridge_connection is None:
-            raise ConnectionError("Native messaging bridge is not connected")
-        _write_socket_message(bridge_connection, msg)
+def send_to_bridge(message):
+    with bridge_lock:
+        connection = bridge_connection
+    if connection is None:
+        raise ConnectionError(
+            "no bridge connected — is the extension loaded and the Canvas page open?"
+        )
+    write_socket_message(connection, message)
 
 
-def _serve_bridge_socket(socket_path):
-    global bridge_connection
+def serve_bridge_socket(socket_path):
+    """Accept one bridge connection at a time on a mode-0600 Unix socket."""
+    global bridge_connection, bridge_connected_at
 
     if os.path.lexists(socket_path):
-        mode = os.lstat(socket_path).st_mode
-        if not stat.S_ISSOCK(mode):
+        if not stat.S_ISSOCK(os.lstat(socket_path).st_mode):
             raise RuntimeError(
-                f"Refusing to replace non-socket bridge path: {socket_path}"
+                "refusing to replace %s: it exists and is not a socket" % socket_path
             )
         os.unlink(socket_path)
 
@@ -205,36 +359,44 @@ def _serve_bridge_socket(socket_path):
     listener.bind(socket_path)
     os.chmod(socket_path, 0o600)
     listener.listen(1)
-    sys.stderr.write(f"[Proxy] Bridge socket listening at {socket_path}\n")
-    sys.stderr.flush()
+    log("bridge socket listening at %s", socket_path)
 
     while True:
         connection, _ = listener.accept()
-        sys.stderr.write("[Proxy] Native messaging bridge connected\n")
-        sys.stderr.flush()
-        with bridge_connection_lock:
-            if bridge_connection is not None:
-                bridge_connection.close()
+        log("bridge connected")
+        with bridge_lock:
+            previous = bridge_connection
             bridge_connection = connection
+            bridge_connected_at = time.monotonic()
+        if previous is not None:
+            # A second browser (or a restart) supersedes the old one. Closing
+            # the stale socket is what stops two Chromium instances fighting.
+            try:
+                previous.close()
+            except OSError:
+                pass
+
         try:
             while True:
-                message = _read_socket_message(connection)
+                message = read_socket_message(connection)
                 if message is None:
                     break
-                _route_bridge_response(message)
-        except Exception as exc:
-            sys.stderr.write(f"[Proxy] Bridge connection failed: {exc}\n")
-            sys.stderr.flush()
+                route_bridge_message(message)
+        except Exception as exc:  # noqa: BLE001 - one bad frame must not kill the listener
+            warn("bridge read failed: %s", exc)
         finally:
-            with bridge_connection_lock:
+            with bridge_lock:
                 if bridge_connection is connection:
                     bridge_connection = None
-            connection.close()
-            sys.stderr.write("[Proxy] Native messaging bridge disconnected\n")
-            sys.stderr.flush()
+                    bridge_connected_at = None
+            try:
+                connection.close()
+            except OSError:
+                pass
+            log("bridge disconnected")
 
 
-def _connect_bridge_socket(socket_path, timeout=10):
+def connect_bridge_socket(socket_path, timeout=15.0):
     deadline = time.monotonic() + timeout
     while True:
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -248,146 +410,81 @@ def _connect_bridge_socket(socket_path, timeout=10):
             time.sleep(0.2)
 
 
-MODEL_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
-
-
-def _is_valid_model(model):
-    return (
-        isinstance(model, str)
-        and bool(MODEL_PATTERN.fullmatch(model))
-        and '..' not in model
-    )
-
-
-DEFAULT_MAX_REQUEST_BYTES = 32 * 1024 * 1024
-
-
-def _token_file_path():
-    return os.environ.get(
-        'PROXY_TOKEN_FILE',
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), '.proxy_token')
-    )
-
-
-def _load_proxy_token():
-    """Load the bearer token from the environment or a mode-600 token file."""
-    token = os.environ.get('PROXY_TOKEN', '').strip()
-    if token:
-        return token
-    try:
-        with open(_token_file_path(), 'r', encoding='utf-8') as token_file:
-            return token_file.read().strip()
-    except OSError:
-        return ''
-
-# ═══════════════════════════════════════════════════════════════════════════
-# REMOTE IMAGE FETCHING
-# ═══════════════════════════════════════════════════════════════════════════
+# ───────────────────────────────────────────────────────────────────────────
+# Remote image fetching
+# ───────────────────────────────────────────────────────────────────────────
 
 class ImageFetchError(ValueError):
     """A remote image was rejected or could not be fetched safely."""
 
 
-def _url_fetch_enabled():
-    return os.environ.get('PROXY_ALLOW_URL_FETCH', '').lower() in {
-        '1', 'true', 'yes', 'on'
-    }
-
-
-def _validate_public_image_url(url):
+def validate_public_url(url):
+    """Reject anything that is not a plain public HTTP(S) destination."""
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme not in {'http', 'https'}:
+    if parsed.scheme not in {"http", "https"}:
         raise ImageFetchError("only HTTP and HTTPS URLs are supported")
     if not parsed.hostname or parsed.username or parsed.password:
         raise ImageFetchError("URL authority is invalid")
-
     try:
-        port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
     except ValueError as exc:
         raise ImageFetchError("URL port is invalid") from exc
-
     try:
-        addresses = socket.getaddrinfo(
-            parsed.hostname,
-            port,
-            type=socket.SOCK_STREAM
-        )
+        addresses = socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
-        raise ImageFetchError(f"hostname resolution failed: {exc}") from exc
-
+        raise ImageFetchError("hostname resolution failed: %s" % exc) from exc
     if not addresses:
         raise ImageFetchError("hostname did not resolve")
 
-    for address_info in addresses:
-        address = ipaddress.ip_address(address_info[4][0])
-        if (
-            address.is_private
-            or address.is_loopback
-            or address.is_link_local
-            or address.is_reserved
-            or address.is_unspecified
-            or address.is_multicast
-            or not address.is_global
-        ):
+    for family_info in addresses:
+        address = ipaddress.ip_address(family_info[4][0])
+        if not address.is_global or address.is_multicast:
             raise ImageFetchError("destination resolves to a non-public address")
     return parsed
 
 
-class _PublicOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Apply the destination policy again before following every redirect."""
+class PublicOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-apply the destination policy on every redirect hop."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        _validate_public_image_url(newurl)
+        validate_public_url(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _fetch_remote_image(url):
-    if not _url_fetch_enabled():
+def fetch_remote_image(url):
+    if not env_flag("PROXY_ALLOW_URL_FETCH"):
         raise ImageFetchError(
-            "remote URL fetching is disabled; use a data URI or set "
+            "remote URL fetching is disabled; send a data URI or set "
             "PROXY_ALLOW_URL_FETCH=true"
         )
 
-    _validate_public_image_url(url)
-    try:
-        max_bytes = int(os.environ.get(
-            'PROXY_MAX_IMAGE_BYTES',
-            str(20 * 1024 * 1024)
-        ))
-    except ValueError as exc:
-        raise ImageFetchError("PROXY_MAX_IMAGE_BYTES must be an integer") from exc
-    if max_bytes <= 0:
-        raise ImageFetchError("PROXY_MAX_IMAGE_BYTES must be positive")
+    validate_public_url(url)
+    max_bytes = env_int("PROXY_MAX_IMAGE_BYTES", DEFAULT_MAX_IMAGE_BYTES, minimum=1)
 
-    request = urllib.request.Request(
-        url,
-        headers={'User-Agent': 'GeminiCanvasProxy/1.0'}
-    )
-    opener = urllib.request.build_opener(_PublicOnlyRedirectHandler())
+    request = urllib.request.Request(url, headers={"User-Agent": "gemini-canvas-proxy"})
+    opener = urllib.request.build_opener(PublicOnlyRedirectHandler())
 
     try:
         with opener.open(request, timeout=15) as response:
-            content_type = response.headers.get(
-                'Content-Type',
-                'application/octet-stream'
-            ).split(';', 1)[0].strip().lower()
-            if not content_type.startswith('image/'):
+            content_type = (
+                response.headers.get("Content-Type", "application/octet-stream")
+                .split(";", 1)[0]
+                .strip()
+                .lower()
+            )
+            if not content_type.startswith("image/"):
                 raise ImageFetchError(
-                    f"response content type is not an image ({content_type})"
+                    "response content type is not an image (%s)" % content_type
                 )
 
-            declared_length = response.headers.get('Content-Length')
-            if declared_length:
+            declared = response.headers.get("Content-Length")
+            if declared:
                 try:
-                    declared_bytes = int(declared_length)
+                    declared_bytes = int(declared)
                 except ValueError as exc:
-                    raise ImageFetchError(
-                        "response Content-Length is invalid"
-                    ) from exc
+                    raise ImageFetchError("response Content-Length is invalid") from exc
                 if declared_bytes > max_bytes:
-                    raise ImageFetchError(
-                        f"image exceeds the {max_bytes}-byte limit"
-                    )
+                    raise ImageFetchError("image exceeds the %d-byte limit" % max_bytes)
 
             chunks = []
             received = 0
@@ -397,322 +494,360 @@ def _fetch_remote_image(url):
                     break
                 received += len(chunk)
                 if received > max_bytes:
-                    raise ImageFetchError(
-                        f"image exceeds the {max_bytes}-byte limit"
-                    )
+                    raise ImageFetchError("image exceeds the %d-byte limit" % max_bytes)
                 chunks.append(chunk)
     except ImageFetchError:
         raise
-    except Exception as exc:
-        raise ImageFetchError(f"fetch failed: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - network stacks raise a wide variety
+        raise ImageFetchError("fetch failed: %s" % exc) from exc
 
-    return content_type, base64.b64encode(b''.join(chunks)).decode('ascii')
+    return content_type, base64.b64encode(b"".join(chunks)).decode("ascii")
 
 
-def _log_dropped_image(url, reason):
+def log_dropped_image(url, reason):
     try:
-        host = urllib.parse.urlsplit(url).hostname or '<invalid-host>'
+        host = urllib.parse.urlsplit(url).hostname or "<invalid-host>"
     except ValueError:
-        host = '<invalid-host>'
-    sys.stderr.write(f"[Proxy] Dropped remote image from {host}: {reason}\n")
-    sys.stderr.flush()
+        host = "<invalid-host>"
+    warn("dropped remote image from %s: %s", host, reason)
 
 
-def _warn_ignored_parameter(name):
-    sys.stderr.write(
-        f"[Proxy] WARNING: Ignoring unsupported request parameter: {name}\n"
-    )
-    sys.stderr.flush()
+# ───────────────────────────────────────────────────────────────────────────
+# Request translation: OpenAI chat completions -> Gemini generateContent
+# ───────────────────────────────────────────────────────────────────────────
+
+class RequestError(ValueError):
+    """The caller's request cannot be translated. Surfaces as HTTP 400."""
+
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# FORMAT TRANSLATION: OpenAI Chat Completions → Gemini generateContent
-# ═══════════════════════════════════════════════════════════════════════════
+def parse_data_uri(url):
+    """Return (mime, base64) from a data: URI, or raise RequestError."""
+    header, _, payload = url.partition(",")
+    if not _:
+        raise RequestError("image data URI has no comma separator")
+    if not payload:
+        raise RequestError("image data URI is empty")
+
+    meta = header[5:] if header.startswith("data:") else header
+    mime = meta.split(";", 1)[0].strip() or "image/png"
+    if not mime.startswith("image/"):
+        raise RequestError("data URI is not an image (%s)" % mime)
+    if ";base64" not in meta:
+        raise RequestError("image data URI must be base64-encoded")
+    return mime, payload
+
+
+def content_to_parts(content):
+    """Translate one OpenAI message body into Gemini parts."""
+    if content is None:
+        # Assistant turns that only contain tool calls have `content: null`.
+        return []
+
+    if isinstance(content, str):
+        return [{"text": content}] if content else []
+
+    if not isinstance(content, list):
+        raise RequestError("message content must be a string or a list of parts")
+
+    parts = []
+    for part in content:
+        if not isinstance(part, dict):
+            raise RequestError("message content parts must be objects")
+
+        part_type = part.get("type")
+        if part_type in ("text", "input_text"):
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                parts.append({"text": text})
+
+        elif part_type in ("image_url", "input_image"):
+            image = part.get("image_url")
+            url = image.get("url") if isinstance(image, dict) else image
+            if not isinstance(url, str) or not url:
+                raise RequestError("image_url part has no URL")
+            if url.startswith("data:"):
+                mime, payload = parse_data_uri(url)
+                parts.append({"inlineData": {"mimeType": mime, "data": payload}})
+            elif url.startswith(("http://", "https://")):
+                # Canvas cannot fetch arbitrary URLs, and fileData needs an
+                # upload step the Canvas key does not permit, so the host
+                # fetches and inlines the bytes itself.
+                try:
+                    mime, payload = fetch_remote_image(url)
+                    parts.append({"inlineData": {"mimeType": mime, "data": payload}})
+                except ImageFetchError as exc:
+                    log_dropped_image(url, str(exc))
+                    parts.append({"text": "[Remote image omitted: %s]" % exc})
+            else:
+                raise RequestError("unsupported image URL scheme")
+
+        elif part_type in ("file", "input_file"):
+            raise RequestError(
+                "file parts are not supported; inline the content or send an image"
+            )
+
+        # Unknown part types are skipped: clients add fields like
+        # `cache_control` that have no Gemini equivalent, and failing the whole
+        # request over one is worse than ignoring it.
+
+    return parts
+
+
+def sanitize_schema(schema):
+    """Strip JSON Schema keywords Gemini rejects, recursively."""
+    if isinstance(schema, dict):
+        cleaned = {}
+        for key, value in schema.items():
+            if key in UNSUPPORTED_SCHEMA_KEYS:
+                continue
+            # Gemini rejects a boolean `items`; true means "any", which maps to {}.
+            if key == "items" and isinstance(value, bool):
+                if value:
+                    cleaned[key] = {}
+                continue
+            cleaned[key] = sanitize_schema(value)
+        return cleaned
+    if isinstance(schema, list):
+        return [sanitize_schema(item) for item in schema]
+    return schema
+
+
+def uppercase_types(schema):
+    """Gemini wants SCREAMING_CASE type values."""
+    if isinstance(schema, dict):
+        if isinstance(schema.get("type"), str) and not schema["type"].isupper():
+            schema["type"] = schema["type"].upper()
+        for value in schema.values():
+            uppercase_types(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            uppercase_types(item)
+    return schema
+
+
+def translate_tools(tools):
+    """Convert OpenAI tool definitions into one Gemini tools object."""
+    declarations = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            continue
+        function = tool.get("function") or {}
+        name = function.get("name")
+        if not name:
+            continue
+        parameters = function.get("parameters") or {"type": "object", "properties": {}}
+        declarations.append({
+            "name": name,
+            "description": function.get("description", ""),
+            "parameters": uppercase_types(sanitize_schema(parameters)),
+        })
+    return [{"functionDeclarations": declarations}] if declarations else None
+
+
+def translate_response_format(response_format):
+    """Map OpenAI response_format onto Gemini's generationConfig fields."""
+    if not isinstance(response_format, dict):
+        return {}
+
+    kind = response_format.get("type")
+    if kind == "json_object":
+        return {"responseMimeType": "application/json"}
+    if kind == "json_schema":
+        spec = response_format.get("json_schema") or {}
+        schema = spec.get("schema")
+        if isinstance(schema, dict):
+            return {
+                "responseMimeType": "application/json",
+                "responseSchema": uppercase_types(sanitize_schema(schema)),
+            }
+    return {}
+
 
 def openai_to_gemini(body):
-    """
-    Convert an OpenAI chat completions request to Gemini generateContent format.
+    """Convert an OpenAI chat completion request into Gemini generateContent."""
+    if not isinstance(body, dict):
+        raise RequestError("request body must be a JSON object")
 
-    Key conversions:
-        - messages[] → contents[] with role mapping (user→user, assistant→model)
-        - system message → systemInstruction
-        - OpenAI sampling controls → generationConfig
-        - tools[] → single tools[{functionDeclarations: [...]}] with UPPERCASE types
-        - assistant tool_calls → native functionCall history parts
-        - tool results → native functionResponse parts in a user turn
-    """
+    messages = body.get("messages")
+    if messages is None:
+        messages = []
+    if not isinstance(messages, list):
+        raise RequestError("messages must be a list")
+
+    system_texts = []
     contents = []
-    system_instruction = None
-    pending_tool_parts = []  # Buffer for consecutive tool messages (flush as single user msg)
+    pending_tool_parts = []
+    tool_result_limit = env_int(
+        "PROXY_TOOL_RESULT_MAX_CHARS", DEFAULT_TOOL_RESULT_CHARS, minimum=1
+    )
 
-    for msg in body.get('messages', []):
-        role = msg.get('role', 'user')
-        content = msg.get('content', '')
+    def flush_tool_parts():
+        if pending_tool_parts:
+            contents.append({"role": "user", "parts": list(pending_tool_parts)})
+            pending_tool_parts.clear()
 
-        # Flush pending tool parts before any non-tool message
-        if role != 'tool' and pending_tool_parts:
-            contents.append({"role": "user", "parts": pending_tool_parts})
-            pending_tool_parts = []
+    # First pass: map tool_call ids to names so a result does not need to
+    # search the history for every message.
+    tool_names = {}
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if isinstance(call, dict) and call.get("id"):
+                tool_names[call["id"]] = (call.get("function") or {}).get("name", "")
 
-        # ── Assistant messages with tool_calls ────────────────────────────
-        # Send native functionCall parts in history. Gemini 3 requires a
-        # thoughtSignature on functionCall parts for validation.
-        if role == 'assistant' and msg.get('tool_calls'):
-            parts = []
-            if content:
-                parts.append({"text": content})
-            for tc in msg.get('tool_calls', []):
-                func = tc.get('function', {})
-                args_str = func.get('arguments', '{}')
+    for message in messages:
+        if not isinstance(message, dict):
+            raise RequestError("each message must be an object")
+
+        role = message.get("role", "user")
+        content = message.get("content")
+
+        if role != "tool":
+            flush_tool_parts()
+
+        if role == "system" or role == "developer":
+            # OpenAI permits several system messages; Gemini has one system
+            # instruction. Keep every one of them, in order.
+            texts = [
+                part["text"]
+                for part in content_to_parts(content)
+                if "text" in part
+            ]
+            system_texts.extend(texts)
+            continue
+
+        if role == "assistant" and message.get("tool_calls"):
+            parts = content_to_parts(content)
+            for call in message["tool_calls"]:
+                function = call.get("function") or {}
+                raw_arguments = function.get("arguments") or "{}"
                 try:
-                    args_parsed = json.loads(args_str)
-                except Exception:
-                    args_parsed = {}
-                fc_part = {
+                    arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+                except ValueError:
+                    # A model that emitted invalid JSON still has to be
+                    # replayable; send the raw string so Gemini can see it.
+                    arguments = {"__raw_arguments": raw_arguments}
+                if not isinstance(arguments, dict):
+                    arguments = {"value": arguments}
+
+                part = {
                     "functionCall": {
-                        "name": func.get('name', ''),
-                        "args": args_parsed
+                        "name": function.get("name", ""),
+                        "args": arguments,
                     }
                 }
-                signature = tc.get('x_gemini_thought_signature')
+                signature = call.get("x_gemini_thought_signature")
                 if not signature:
                     signature = "context_engineering_is_the_way_to_go"
-                    sys.stderr.write(
-                        "[Proxy] WARNING: Missing Gemini thoughtSignature for "
-                        f"function call {func.get('name', '<unnamed>')}; "
-                        "using compatibility fallback\n"
+                    warn(
+                        "missing thoughtSignature for function call %r; using the "
+                        "compatibility placeholder",
+                        function.get("name", "<unnamed>"),
                     )
-                    sys.stderr.flush()
-                fc_part["thoughtSignature"] = signature
-                parts.append(fc_part)
+                part["thoughtSignature"] = signature
+                parts.append(part)
             contents.append({"role": "model", "parts": parts})
             continue
 
-        # ── Tool results ──────────────────────────────────────────────────
-        # Send native functionResponse parts with role "user" (per Gemini spec
-        # and confirmed by CanvasToAPI). Consecutive tool messages are buffered
-        # and flushed as a single user message to maintain role alternation.
-        if role == 'tool':
-            tool_call_id = msg.get('tool_call_id', '')
-            # Try message.name first (OpenAI spec), then scan history
-            func_name = msg.get('name', '')
-            if not func_name:
-                for prev_msg in body.get('messages', []):
-                    if prev_msg.get('role') == 'assistant' and prev_msg.get('tool_calls'):
-                        for tc in prev_msg['tool_calls']:
-                            if tc.get('id') == tool_call_id:
-                                func_name = tc.get('function', {}).get('name', '')
-                                break
-            result_text = str(content)
-            if len(result_text) > 5000:
-                result_text = result_text[:5000] + "\n... (truncated)"
-            # Try to parse as JSON for structured response, else use as string
+        if role == "tool":
+            text = content if isinstance(content, str) else json.dumps(content)
+            if len(text) > tool_result_limit:
+                lost = len(text) - tool_result_limit
+                text = text[:tool_result_limit] + "\n... (%d characters truncated)" % lost
             try:
-                result_obj = json.loads(result_text)
-            except Exception:
-                result_obj = {"output": result_text}
+                payload = json.loads(text)
+            except ValueError:
+                payload = {"output": text}
+            if not isinstance(payload, dict):
+                # Gemini's functionResponse.response must be an object.
+                payload = {"output": payload}
             pending_tool_parts.append({
-                "functionResponse": {"name": func_name, "response": result_obj}
+                "functionResponse": {
+                    "name": tool_names.get(message.get("tool_call_id"), "")
+                    or message.get("name", ""),
+                    "response": payload,
+                }
             })
             continue
 
-        # ── Multimodal content (images, mixed text+image) ────────────────
-        # OpenAI sends images as content arrays:
-        #   [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "data:..."}}]
-        # Gemini expects separate parts:
-        #   [{"text": "..."}, {"inlineData": {"mimeType": "image/png", "data": "base64..."}}]
-        #
-        # Handles both data URIs and HTTP URLs (fetched server-side).
-        # WARNING: Chrome native messaging limits host→extension to 1MB.
-        # Large images (>750KB base64) may cause truncation. We log a warning
-        # but still attempt delivery — Canvas may accept partial data.
-        if isinstance(content, list):
-            parts = []
-            for part in content:
-                if part.get('type') == 'text':
-                    parts.append({"text": part['text']})
-                elif part.get('type') == 'image_url':
-                    url = part.get('image_url', {}).get('url', '')
-                    if url.startswith('data:'):
-                        # Data URI: extract mime type and base64 data
-                        meta, b64 = url.split(',', 1)
-                        mime = meta.split(';')[0].split(':')[1] if ':' in meta else 'image/jpeg'
-                        parts.append({"inlineData": {"mimeType": mime, "data": b64}})
-                    elif url.startswith(('http://', 'https://')):
-                        # HTTP URL: fetch the image server-side, convert to inlineData
-                        # This is necessary because Canvas can't fetch arbitrary URLs,
-                        # and Gemini's fileData requires a separate upload step that
-                        # the Canvas key may not support.
-                        try:
-                            content_type, b64 = _fetch_remote_image(url)
-                            parts.append({
-                                "inlineData": {
-                                    "mimeType": content_type,
-                                    "data": b64
-                                }
-                            })
-                        except ImageFetchError as exc:
-                            reason = str(exc)
-                            _log_dropped_image(url, reason)
-                            parts.append({
-                                "text": f"[Remote image omitted: {reason}]"
-                            })
-            if parts:
-                # Check total payload size for the 1MB native messaging limit
-                try:
-                    payload_size = len(json.dumps(parts).encode('utf-8'))
-                    if payload_size > 900_000:  # 900KB safety margin
-                        sys.stderr.write(f"WARNING: Multimodal payload {payload_size}B exceeds 1MB native messaging limit\n")
-                except Exception:
-                    pass
-
-                if role == 'system':
-                    system_instruction = {"parts": parts}
-                elif role == 'assistant':
-                    contents.append({"role": "model", "parts": parts})
-                else:
-                    contents.append({"role": "user", "parts": parts})
+        parts = content_to_parts(content)
+        if not parts:
             continue
+        contents.append({"role": "model" if role == "assistant" else "user", "parts": parts})
 
-        # ── Plain text messages ───────────────────────────────────────────
-        if role == 'system':
-            system_instruction = {"parts": [{"text": content}]}
-        elif role == 'assistant':
-            contents.append({"role": "model", "parts": [{"text": content}]})
+    flush_tool_parts()
+
+    # Gemini rejects two consecutive turns with the same role.
+    merged = []
+    for turn in contents:
+        if merged and merged[-1]["role"] == turn["role"]:
+            merged[-1]["parts"].extend(turn["parts"])
         else:
-            contents.append({"role": "user", "parts": [{"text": content}]})
+            merged.append(turn)
 
-    # Flush any remaining tool parts after the loop
-    if pending_tool_parts:
-        contents.append({"role": "user", "parts": pending_tool_parts})
+    result = {"contents": merged, "generationConfig": {}}
+    if system_texts:
+        result["systemInstruction"] = {"parts": [{"text": t} for t in system_texts]}
 
-    result = {
-        "contents": contents,
-        "generationConfig": {}
-    }
+    config = result["generationConfig"]
+    if "temperature" in body:
+        config["temperature"] = body["temperature"]
+    if body.get("max_completion_tokens") is not None:
+        config["maxOutputTokens"] = body["max_completion_tokens"]
+    elif body.get("max_tokens") is not None:
+        config["maxOutputTokens"] = body["max_tokens"]
+    if "top_p" in body:
+        config["topP"] = body["top_p"]
+    if "top_k" in body:
+        config["topK"] = body["top_k"]
+    if "seed" in body:
+        config["seed"] = body["seed"]
+    if "frequency_penalty" in body:
+        config["frequencyPenalty"] = body["frequency_penalty"]
+    if "presence_penalty" in body:
+        config["presencePenalty"] = body["presence_penalty"]
 
-    if system_instruction:
-        result["systemInstruction"] = system_instruction
+    if "stop" in body:
+        stop = body["stop"]
+        if isinstance(stop, str):
+            config["stopSequences"] = [stop]
+        elif isinstance(stop, list) and all(isinstance(item, str) for item in stop):
+            config["stopSequences"] = stop
+        elif stop is not None:
+            warn("ignoring `stop`: expected a string or a list of strings")
 
-    # ── Generation parameters ─────────────────────────────────────────────
-    gc = result["generationConfig"]
-    if 'temperature' in body:
-        gc["temperature"] = body["temperature"]
-    if 'max_tokens' in body:
-        gc["maxOutputTokens"] = body["max_tokens"]
-    if 'top_p' in body:
-        gc["topP"] = body["top_p"]
-    if 'top_k' in body:
-        gc["topK"] = body["top_k"]
-    if 'seed' in body:
-        gc["seed"] = body["seed"]
-    if 'frequency_penalty' in body:
-        gc["frequencyPenalty"] = body["frequency_penalty"]
-    if 'presence_penalty' in body:
-        gc["presencePenalty"] = body["presence_penalty"]
-    if 'max_completion_tokens' in body:
-        gc["maxOutputTokens"] = body["max_completion_tokens"]
-    if 'stop' in body:
-        if isinstance(body["stop"], str):
-            gc["stopSequences"] = [body["stop"]]
-        elif (
-            isinstance(body["stop"], list)
-            and all(isinstance(item, str) for item in body["stop"])
-        ):
-            gc["stopSequences"] = body["stop"]
-        else:
-            _warn_ignored_parameter("stop (expected a string or string list)")
+    config.update(translate_response_format(body.get("response_format")))
 
-    response_format = body.get('response_format')
-    if (
-        isinstance(response_format, dict)
-        and response_format.get("type") == "json_object"
-    ):
-        gc["responseMimeType"] = "application/json"
-    elif response_format is not None:
-        _warn_ignored_parameter("response_format")
+    # Callers that know Gemini can pass generationConfig fields straight
+    # through (thinkingConfig, safetySettings-adjacent knobs, etc.) without
+    # this proxy inventing a mapping for each one.
+    extra_config = body.get("extra_body", {}).get("google", {}).get("generation_config") \
+        if isinstance(body.get("extra_body"), dict) else None
+    if isinstance(extra_config, dict):
+        config.update(extra_config)
 
-    if body.get('n', 1) != 1:
-        _warn_ignored_parameter("n")
-    if body.get('logprobs'):
-        _warn_ignored_parameter("logprobs")
-    if body.get('top_logprobs') is not None:
-        _warn_ignored_parameter("top_logprobs")
-
-    # ── Tool definitions ──────────────────────────────────────────────────
-    # Canvas requires: single tools object, all functions in one array,
-    # UPPERCASE type values (OBJECT, STRING, INTEGER, etc.)
-    tools = body.get('tools', [])
+    tools = translate_tools(body.get("tools") or [])
     if tools:
-        func_decls = []
-        for tool in tools:
-            if tool.get('type') == 'function':
-                func = tool.get('function', {})
-                params = func.get('parameters', {"type": "object", "properties": {}})
-                params = _sanitize_schema_for_gemini(params)
-                params = _uppercase_types(params)
-                func_decls.append({
-                    "name": func.get('name', ''),
-                    "description": func.get('description', ''),
-                    "parameters": params
-                })
-        if func_decls:
-            result["tools"] = [{"functionDeclarations": func_decls}]
+        result["tools"] = tools
+
+    if body.get("n", 1) not in (1, None):
+        warn("ignoring `n`: Gemini returns one candidate per request")
+    if body.get("logprobs"):
+        warn("ignoring `logprobs`: not exposed by the Canvas key")
+    if body.get("top_logprobs") is not None:
+        warn("ignoring `top_logprobs`: not exposed by the Canvas key")
 
     return result
 
 
-def _uppercase_types(obj):
-    """Recursively uppercase all 'type' field values in a JSON schema."""
-    if isinstance(obj, dict):
-        if 'type' in obj and isinstance(obj['type'], str):
-            obj['type'] = obj['type'].upper()
-        for v in obj.values():
-            _uppercase_types(v)
-    elif isinstance(obj, list):
-        for item in obj:
-            _uppercase_types(item)
-    return obj
-
-
-def _sanitize_schema_for_gemini(obj):
-    """Remove JSON Schema fields that Gemini's function calling API rejects.
-
-    Gemini's functionDeclarations use a strict subset of JSON Schema.
-    Unsupported fields cause MALFORMED_FUNCTION_CALL errors.
-    """
-    _FORBIDDEN_KEYS = frozenset({
-        '$schema', '$id', '$ref', '$defs',
-        'additionalProperties', 'unevaluatedProperties',
-        'format', 'nullable',
-        'allOf', 'anyOf', 'oneOf', 'not',
-        'if', 'then', 'else',
-        'const', 'examples',
-        'contentMediaType', 'contentEncoding',
-        'dependentRequired', 'dependentSchemas',
-        'patternProperties',
-        'title',
-    })
-    if isinstance(obj, dict):
-        cleaned = {}
-        for k, v in obj.items():
-            if k in _FORBIDDEN_KEYS:
-                continue
-            # Gemini rejects boolean 'items' — convert to schema or remove
-            if k == 'items' and isinstance(v, bool):
-                if v:
-                    cleaned[k] = {}
-                continue
-            cleaned[k] = _sanitize_schema_for_gemini(v)
-        return cleaned
-    elif isinstance(obj, list):
-        return [_sanitize_schema_for_gemini(item) for item in obj]
-    return obj
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# FORMAT TRANSLATION: Gemini generateContent → OpenAI Chat Completions
-# ═══════════════════════════════════════════════════════════════════════════
+# ───────────────────────────────────────────────────────────────────────────
+# Response translation: Gemini -> OpenAI
+# ───────────────────────────────────────────────────────────────────────────
 
 class GeminiResponseError(ValueError):
     """Gemini returned no usable completion."""
@@ -722,535 +857,678 @@ class GeminiResponseError(ValueError):
         self.details = details or {}
 
 
-FINISH_REASON_MAP = {
-    'STOP': 'stop',
-    'MAX_TOKENS': 'length',
-    'SAFETY': 'content_filter',
-    'RECITATION': 'content_filter',
-    'BLOCKLIST': 'content_filter',
-    'PROHIBITED_CONTENT': 'content_filter',
-}
-
-
-def _map_finish_reason(reason):
-    normalized = str(reason or 'STOP').upper()
+def map_finish_reason(reason):
+    normalized = str(reason or "STOP").upper()
     mapped = FINISH_REASON_MAP.get(normalized)
-    if mapped:
-        return mapped
-    sys.stderr.write(
-        f"[Proxy] WARNING: Unmapped Gemini finishReason {normalized}; using stop\n"
-    )
-    sys.stderr.flush()
-    return 'stop'
+    if mapped is None:
+        warn("unmapped Gemini finishReason %s; reporting `stop`", normalized)
+        return "stop"
+    return mapped
+
+
+def extract_usage(gemini_response):
+    meta = (gemini_response or {}).get("usageMetadata") or {}
+    prompt = meta.get("promptTokenCount", 0)
+    completion = meta.get("candidatesTokenCount", 0)
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": meta.get("totalTokenCount", prompt + completion),
+    }
 
 
 def gemini_to_openai(gemini_response, model):
-    """
-    Convert a Gemini API response to OpenAI chat completion format.
-
-    Handles:
-        - Text parts → message.content
-        - Image parts (inlineData) → message.content as markdown image data URLs
-        - Function calls → tool_calls array
-    """
-    candidates = gemini_response.get('candidates', [])
-    text_parts = []
-    image_parts = []
-    finish_reason = "stop"
-
+    """Convert a Gemini generateContent response into an OpenAI completion."""
+    candidates = (gemini_response or {}).get("candidates") or []
     if not candidates:
-        feedback = gemini_response.get('promptFeedback', {})
-        block_reason = feedback.get('blockReason', 'UNKNOWN')
+        feedback = (gemini_response or {}).get("promptFeedback") or {}
         raise GeminiResponseError(
-            f"Gemini returned no candidates (block reason: {block_reason})",
+            "Gemini returned no candidates (block reason: %s)"
+            % feedback.get("blockReason", "UNKNOWN"),
             {
-                "blockReason": block_reason,
-                "safetyRatings": feedback.get('safetyRatings', [])
-            }
+                "blockReason": feedback.get("blockReason", "UNKNOWN"),
+                "safetyRatings": feedback.get("safetyRatings", []),
+            },
         )
 
     candidate = candidates[0]
-    parts = candidate.get('content', {}).get('parts', [])
-    raw_finish_reason = candidate.get('finishReason', 'STOP')
-    finish_reason = _map_finish_reason(raw_finish_reason)
-    if not parts and str(raw_finish_reason).upper() != 'STOP':
+    parts = (candidate.get("content") or {}).get("parts") or []
+    raw_finish = str(candidate.get("finishReason", "STOP")).upper()
+
+    if not parts and raw_finish != "STOP":
         raise GeminiResponseError(
-            "Gemini returned no content "
-            f"(finish reason: {str(raw_finish_reason).upper()})",
+            "Gemini returned no content (finish reason: %s)" % raw_finish,
             {
-                "finishReason": str(raw_finish_reason).upper(),
-                "safetyRatings": candidate.get('safetyRatings', [])
-            }
+                "finishReason": raw_finish,
+                "safetyRatings": candidate.get("safetyRatings", []),
+            },
         )
 
-    # Extract text, images, and function calls from parts
+    text_segments = []
+    image_segments = []
     tool_calls = []
-    for p in parts:
-        if 'text' in p:
-            text_parts.append(p['text'])
-        elif 'inlineData' in p:
-            # Image generation models return images as inlineData
-            img_data = p['inlineData'].get('data', '')
-            mime = p['inlineData'].get('mimeType', 'image/png')
-            image_parts.append(f"![generated_image](data:{mime};base64,{img_data})")
 
-    # Check for function calls
-    for p in parts:
-        if 'functionCall' in p:
-            fc = p['functionCall']
+    for part in parts:
+        if "text" in part and part["text"]:
+            text_segments.append(part["text"])
+        elif "inlineData" in part:
+            data = part["inlineData"].get("data", "")
+            mime = part["inlineData"].get("mimeType", "image/png")
+            image_segments.append("![generated_image](data:%s;base64,%s)" % (mime, data))
+        elif "functionCall" in part:
+            call = part["functionCall"]
             tool_call = {
-                "id": f"call_{uuid.uuid4().hex[:8]}",
+                "id": "call_%s" % uuid.uuid4().hex[:8],
                 "type": "function",
                 "function": {
-                    "name": fc.get('name', ''),
-                    "arguments": json.dumps(fc.get('args', {}))
-                }
+                    "name": call.get("name", ""),
+                    "arguments": json.dumps(call.get("args") or {}),
+                },
             }
-            if p.get('thoughtSignature'):
-                tool_call["x_gemini_thought_signature"] = p["thoughtSignature"]
+            if part.get("thoughtSignature"):
+                tool_call["x_gemini_thought_signature"] = part["thoughtSignature"]
             tool_calls.append(tool_call)
 
-    # Combine text and image parts into content
-    content = '\n'.join(text_parts + image_parts) or None
-
-    if tool_calls:
-        return {
-            "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-            "object": "chat.completion",
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": content,
-                    "tool_calls": tool_calls
-                },
-                "finish_reason": "tool_calls"
-            }],
-            "usage": _extract_usage(gemini_response)
-        }
-
-    content = '\n'.join(text_parts + image_parts) or ""
-
-    return {
-        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+    content = "\n".join(text_segments + image_segments)
+    completion = {
+        "id": "chatcmpl-%s" % uuid.uuid4().hex[:8],
         "object": "chat.completion",
+        "created": int(time.time()),
         "model": model,
         "choices": [{
             "index": 0,
             "message": {"role": "assistant", "content": content},
-            "finish_reason": finish_reason
+            "finish_reason": "tool_calls" if tool_calls else map_finish_reason(raw_finish),
         }],
-        "usage": _extract_usage(gemini_response)
+        "usage": extract_usage(gemini_response),
     }
+    if tool_calls:
+        completion["choices"][0]["message"]["tool_calls"] = tool_calls
+    return completion
 
 
-def _extract_usage(gemini_response):
-    """Extract token usage from Gemini response."""
-    meta = gemini_response.get('usageMetadata', {})
-    return {
-        "prompt_tokens": meta.get('promptTokenCount', 0),
-        "completion_tokens": meta.get('candidatesTokenCount', 0),
-        "total_tokens": meta.get('totalTokenCount', 0)
-    }
+# ───────────────────────────────────────────────────────────────────────────
+# HTTP server
+# ───────────────────────────────────────────────────────────────────────────
+
+MODEL_CATALOG = [
+    ("gemini-3-flash-preview", "Gemini 3 Flash — fast, strong at tool use"),
+    ("gemini-2.5-flash-preview-05-20", "Gemini 2.5 Flash preview"),
+    ("gemini-3.1-flash-image-preview", "Nano Banana 2 — image generation"),
+    ("gemini-2.5-flash-image", "Nano Banana — image generation"),
+]
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# HTTP SERVER
-# ═══════════════════════════════════════════════════════════════════════════
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
 
 class APIHandler(BaseHTTPRequestHandler):
-    """HTTP handler exposing OpenAI-compatible endpoints."""
+    """OpenAI-compatible HTTP surface.
 
-    def do_POST(self):
-        if self.path.startswith('/v1/') and not self._require_bearer_token():
-            return
-        if self.path == '/v1/chat/completions':
-            self._handle_chat_completions()
-        else:
-            self.send_error(404)
+    Every externally visible behaviour here is covered by
+    05-runs/harness/http_probe.sh; change one and the probe must change too.
+    """
+
+    protocol_version = "HTTP/1.1"
+    server_version = "gemini-canvas-proxy"
+    sys_version = ""
+
+    # One shared start time so /status can report uptime.
+    started_at = time.time()
+
+    # ── routing ────────────────────────────────────────────────────────────
 
     def do_GET(self):
-        if self.path.startswith('/v1/') and not self._require_bearer_token():
+        path = self.path.split("?", 1)[0]
+        if path == "/health":
+            self._json(200, {
+                "status": "ok",
+                "bridge": self._bridge_snapshot(),
+                "uptime_seconds": round(time.time() - self.started_at, 1),
+            })
             return
-        if self.path == '/v1/models':
-            models = [
-                {"id": "gemini-3-flash-preview", "object": "model", "owned_by": "google", "description": "Gemini 3 Flash — fast, capable, great for agents"},
-                {"id": "gemini-2.5-flash-preview-05-20", "object": "model", "owned_by": "google", "description": "Gemini 2.5 Flash Preview"},
-                {"id": "gemini-3.1-flash-image-preview", "object": "model", "owned_by": "google", "description": "Nano Banana 2 — image generation"},
-                {"id": "gemini-2.5-flash-image", "object": "model", "owned_by": "google", "description": "Nano Banana — image generation"}
-            ]
-            self._json_response(200, {"object": "list", "data": models})
-        elif self.path == '/health':
-            self._json_response(200, {"status": "ok"})
-        else:
-            self.send_error(404)
+        if path == "/status":
+            if not self._authorized():
+                return
+            self._json(200, self._status_payload())
+            return
+        if path == "/v1/models":
+            if not self._authorized():
+                return
+            self._json(200, {"object": "list", "data": [
+                {"id": model, "object": "model", "created": 0, "owned_by": "google",
+                 "description": description}
+                for model, description in MODEL_CATALOG
+            ]})
+            return
+        if path.startswith("/v1/models/"):
+            if not self._authorized():
+                return
+            model = path[len("/v1/models/"):]
+            entry = dict(MODEL_CATALOG).get(model)
+            if entry is None:
+                self._error(404, "model %r is not in the advertised list" % model)
+                return
+            self._json(200, {"id": model, "object": "model", "created": 0,
+                             "owned_by": "google", "description": entry})
+            return
+        self._error(404, "unknown endpoint: %s" % path)
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if path != "/v1/chat/completions":
+            self._error(404, "unknown endpoint: %s" % path)
+            return
+        if not self._authorized():
+            return
+        self._handle_chat_completions()
 
     def do_OPTIONS(self):
-        request_origin = self.headers.get('Origin')
-        allowed_origin = os.environ.get('PROXY_ALLOWED_ORIGIN', '').strip()
-        if request_origin and request_origin != allowed_origin:
-            self._json_error(403, "Origin is not allowed")
+        origin = self.headers.get("Origin")
+        allowed = os.environ.get("PROXY_ALLOWED_ORIGIN", "").strip()
+        if origin and (not allowed or origin != allowed):
+            self._error(403, "origin is not allowed")
             return
         self.send_response(204)
-        self._send_cors_header()
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        if allowed:
+            self._cors_headers()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def _require_bearer_token(self):
-        expected = _load_proxy_token()
+    # ── handlers ───────────────────────────────────────────────────────────
+
+    def _handle_chat_completions(self):
+        started = time.monotonic()
+
+        try:
+            body = self._read_json_body()
+            model = body.get("model") or "gemini-3-flash-preview"
+            if not isinstance(model, str) or not MODEL_PATTERN.fullmatch(model) or ".." in model:
+                raise RequestError(
+                    "invalid model identifier; use only letters, digits, '.', '_' and '-'"
+                )
+            gemini_body = openai_to_gemini(body)
+        except RequestError as exc:
+            self._error(exc.status, str(exc))
+            return
+        except ConfigError as exc:
+            self._error(500, "proxy misconfigured: %s" % exc)
+            return
+
+        streaming = bool(body.get("stream"))
+        request_id = str(uuid.uuid4())
+        queue = register_request(request_id)
+
+        message = {
+            "type": "api_request",
+            "id": request_id,
+            "method": "POST",
+            "path": "/v1beta/models/%s:%s" % (
+                model, "streamGenerateContent" if streaming else "generateContent"
+            ),
+            "body": gemini_body,
+            "headers": {},
+            "stream": streaming,
+            "stream_options": body.get("stream_options") or {},
+        }
+
+        try:
+            self._dispatch(request_id, message)
+        except (ConnectionError, OSError) as exc:
+            unregister_request(request_id)
+            self._error(502, "bridge unavailable: %s" % exc)
+            return
+        except ValueError as exc:
+            unregister_request(request_id)
+            self._error(413, str(exc))
+            return
+
+        try:
+            if streaming:
+                self._relay_stream(request_id, queue, model, body, started)
+            else:
+                self._relay_buffered(request_id, queue, model, started)
+        finally:
+            unregister_request(request_id)
+
+    def _dispatch(self, request_id, message):
+        """Send a request to the bridge, chunking if it exceeds the frame limit."""
+        serialized = json.dumps(message, separators=(",", ":")).encode("utf-8")
+        if len(serialized) <= MAX_HOST_TO_BROWSER_BYTES * 0.9:
+            outbound_sender(message)
+            return
+
+        chunks = chunk_request(serialized, request_id)
+        log("request %s is %d bytes; sending in %d chunks",
+            request_id[:8], len(serialized), len(chunks))
+        for chunk in chunks:
+            outbound_sender(chunk)
+
+    def _relay_buffered(self, request_id, queue, model, started):
+        timeout = env_float("PROXY_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT, minimum=1)
+        try:
+            item = queue.get(timeout=timeout)
+        except Empty:
+            self._error(504, self._timeout_message(request_id, timeout))
+            return
+        except ConfigError as exc:
+            self._error(500, "proxy misconfigured: %s" % exc)
+            return
+
+        if item["kind"] != "response":
+            self._error(502, "bridge sent a streaming event for a non-streaming request")
+            return
+
+        if item.get("error"):
+            self._error(502, item["error"])
+            return
+
+        try:
+            completion = gemini_to_openai(item.get("data") or {}, model)
+        except GeminiResponseError as exc:
+            self._error(502, str(exc), exc.details)
+            return
+
+        self._json(200, completion)
+        self._log_access(200, model, started, "buffered")
+
+    def _relay_stream(self, request_id, queue, model, body, started):
+        include_usage = bool((body.get("stream_options") or {}).get("include_usage"))
+        idle_timeout = env_float(
+            "PROXY_STREAM_IDLE_TIMEOUT", DEFAULT_REQUEST_TIMEOUT, minimum=1
+        )
+        completion_id = "chatcmpl-%s" % uuid.uuid4().hex[:8]
+        created = int(time.time())
+
+        def chunk(delta, finish_reason=None):
+            payload = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+            }
+            if not delta and finish_reason is None:
+                payload["choices"] = []
+            return payload
+
+        headers_sent = False
+        usage = None
+        finish_reason = "stop"
+        tool_index = 0
+
+        def start_stream():
+            nonlocal headers_sent
+            if headers_sent:
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self._cors_headers()
+            self.end_headers()
+            self.close_connection = True
+            headers_sent = True
+
+        def emit(payload):
+            self.wfile.write(b"data: " + json.dumps(payload).encode("utf-8") + b"\n\n")
+            self.wfile.flush()
+
+        try:
+            while True:
+                try:
+                    item = queue.get(timeout=idle_timeout)
+                except Empty:
+                    if not headers_sent:
+                        self._error(504, self._timeout_message(request_id, idle_timeout))
+                    else:
+                        emit(chunk({}, "stop"))
+                        self.wfile.write(b"data: [DONE]\n\n")
+                        self.wfile.flush()
+                    return
+                except ConfigError as exc:
+                    self._error(500, "proxy misconfigured: %s" % exc)
+                    return
+
+                if item["kind"] != "stream":
+                    if not headers_sent:
+                        self._error(502, "bridge sent a buffered response to a streaming request")
+                    return
+
+                event = item.get("event")
+
+                if event == "error":
+                    if not headers_sent:
+                        self._error(502, item.get("error") or "stream failed")
+                    else:
+                        emit(chunk({"content": "\n[proxy error: %s]" % item.get("error")}))
+                        self.wfile.write(b"data: [DONE]\n\n")
+                        self.wfile.flush()
+                    return
+
+                if event == "start":
+                    start_stream()
+                    emit(chunk({"role": "assistant", "content": ""}))
+                    continue
+
+                start_stream()
+
+                if event == "delta":
+                    if item.get("text"):
+                        emit(chunk({"content": item["text"]}))
+                    continue
+
+                if event == "tool_call":
+                    call = item.get("tool_call") or {}
+                    emit(chunk({"tool_calls": [{
+                        "index": call.get("index", tool_index),
+                        "id": call.get("id") or "call_%s" % uuid.uuid4().hex[:8],
+                        "type": "function",
+                        "function": {
+                            "name": call.get("name", ""),
+                            "arguments": call.get("arguments", "{}"),
+                        },
+                    }]}))
+                    tool_index = call.get("index", tool_index) + 1
+                    continue
+
+                if event == "end":
+                    finish_reason = item.get("finish_reason") or "stop"
+                    usage = item.get("usage")
+                    break
+
+            if usage and include_usage:
+                final = chunk({}, finish_reason)
+                final["choices"] = []
+                final["usage"] = usage
+                emit(final)
+            else:
+                emit(chunk({}, finish_reason))
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            self._log_access(200, model, started, "streamed")
+
+        except (BrokenPipeError, ConnectionResetError):
+            # The client hung up mid-stream. Nothing to report, nothing to fix.
+            log("client disconnected during stream %s", request_id[:8])
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    def _bridge_snapshot(self):
+        with bridge_lock:
+            connected = bridge_connection is not None
+            since = bridge_connected_at
+        return {
+            "connected": connected,
+            "connected_seconds": round(time.monotonic() - since, 1) if since else 0,
+        }
+
+    def _status_payload(self):
+        with pending_lock:
+            inflight = len(pending_requests)
+        return {
+            "object": "proxy.status",
+            "protocol": PROTOCOL_VERSION,
+            "uptime_seconds": round(time.time() - self.started_at, 1),
+            "bridge": self._bridge_snapshot(),
+            "inflight_requests": inflight,
+            "config": {
+                "bind": os.environ.get("PROXY_BIND", "127.0.0.1"),
+                "port": env_int("PROXY_PORT", DEFAULT_PORT),
+                "request_timeout_seconds": env_float(
+                    "PROXY_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT
+                ),
+                "max_request_bytes": env_int(
+                    "PROXY_MAX_REQUEST_BYTES", DEFAULT_MAX_REQUEST_BYTES
+                ),
+                "url_fetch_enabled": env_flag("PROXY_ALLOW_URL_FETCH"),
+            },
+        }
+
+    def _timeout_message(self, request_id, timeout):
+        snapshot = self._bridge_snapshot()
+        if not snapshot["connected"]:
+            return ("no request reached the browser: the extension is not connected. "
+                    "Load the extension and open the Canvas page.")
+        return ("the Canvas page did not answer within %gs (request %s). "
+                "Check that the proxy HTML is open in Canvas Preview."
+                % (timeout, request_id[:8]))
+
+    def _read_json_body(self):
+        max_bytes = env_int(
+            "PROXY_MAX_REQUEST_BYTES", DEFAULT_MAX_REQUEST_BYTES, minimum=1
+        )
+        # Chunking is the transport for large bodies, so the ceiling is
+        # whichever limit bites first.
+        limit = min(max_bytes, MAX_CHUNKED_REQUEST_BYTES)
+
+        raw = self._read_body(limit)
+        if not raw:
+            raise RequestError("request body is empty")
+        try:
+            body = json.loads(raw)
+        except ValueError as exc:
+            raise RequestError("request body is not valid JSON: %s" % exc) from exc
+        if not isinstance(body, dict):
+            raise RequestError("request body must be a JSON object")
+        return body
+
+    def _read_body(self, limit):
+        declared = self.headers.get("Content-Length")
+        if declared is not None:
+            try:
+                length = int(declared)
+            except ValueError as exc:
+                raise RequestError("Content-Length is not a number") from exc
+            if length < 0:
+                raise RequestError("Content-Length is negative")
+            if length > limit:
+                raise RequestError(
+                    "request body of %d bytes exceeds the %d-byte limit" % (length, limit),
+                    status=413,
+                )
+            return self.rfile.read(length)
+
+        encoding = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in encoding:
+            return self._read_chunked_body(limit)
+
+        raise RequestError("request has no Content-Length and is not chunked", status=411)
+
+    def _read_chunked_body(self, limit):
+        body = bytearray()
+        while True:
+            line = self.rfile.readline(1024).strip()
+            if not line:
+                break
+            try:
+                size = int(line.split(b";", 1)[0], 16)
+            except ValueError as exc:
+                raise RequestError("malformed chunked encoding") from exc
+            if size == 0:
+                self.rfile.readline(1024)  # trailing CRLF
+                break
+            if len(body) + size > limit:
+                raise RequestError(
+                    "request body exceeds the %d-byte limit" % limit, status=413
+                )
+            body.extend(self.rfile.read(size))
+            self.rfile.readline(1024)  # CRLF after each chunk
+        return bytes(body)
+
+    def _authorized(self):
+        expected = load_proxy_token()
         if not expected:
-            self._json_error(503, "Proxy bearer token is not configured")
+            self._error(503, "no bearer token configured; run the setup script")
             return False
 
-        authorization = self.headers.get('Authorization', '')
-        scheme, separator, supplied = authorization.partition(' ')
-        if separator != ' ' or scheme.lower() != 'bearer' or not hmac.compare_digest(supplied, expected):
-            self._json_error(401, "Missing or invalid bearer token", authenticate=True)
+        header = self.headers.get("Authorization", "")
+        scheme, separator, supplied = header.partition(" ")
+        if separator != " " or scheme.lower() != "bearer" or not hmac.compare_digest(
+            supplied.strip(), expected
+        ):
+            self._error(401, "missing or invalid bearer token", authenticate=True)
             return False
         return True
 
-    def _handle_chat_completions(self):
-        """Translate OpenAI request → Gemini → forward to extension → translate back."""
-        try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            max_request_bytes = int(os.environ.get(
-                'PROXY_MAX_REQUEST_BYTES',
-                str(DEFAULT_MAX_REQUEST_BYTES)
-            ))
-            if content_length < 0:
-                raise ValueError("Content-Length cannot be negative")
-            if content_length > max_request_bytes:
-                self._json_error(
-                    413,
-                    f"Request body exceeds the {max_request_bytes}-byte limit"
-                )
-                return
-            body = json.loads(self.rfile.read(content_length))
-        except Exception as e:
-            self._json_error(400, f"Invalid JSON: {e}")
-            return
+    def _cors_headers(self):
+        allowed = os.environ.get("PROXY_ALLOWED_ORIGIN", "").strip()
+        origin = self.headers.get("Origin")
+        if allowed and origin == allowed:
+            self.send_header("Access-Control-Allow-Origin", allowed)
+            self.send_header("Vary", "Origin")
 
-        model = body.get('model', 'gemini-3-flash-preview')
-        if not _is_valid_model(model):
-            self._json_error(
-                400,
-                "Invalid model identifier; use only letters, numbers, '.', '_', and '-'"
-            )
-            return
-        gemini_body = openai_to_gemini(body)
-        stream = body.get('stream', False)
-
-        # Create a tracked request
-        req_id = str(uuid.uuid4())
-        response_queue = Queue()
-        pending_requests[req_id] = response_queue
-
-        # Check if the payload exceeds the 1MB native messaging limit.
-        # Chrome's kMaximumNativeMessageSize = 1024*1024 bytes for host→extension.
-        # If it does, store the payload and tell the extension to fetch it via HTTP
-        # (extension service workers can fetch localhost without LNA restrictions).
-        message_payload = {
-            "type": "api_request",
-            "id": req_id,
-            "method": "POST",
-            "path": f"/v1beta/models/{model}:generateContent",
-            "body": gemini_body,
-            "headers": {}
-        }
-        serialized = json.dumps(message_payload, separators=(',', ':')).encode('utf-8')
-
-        try:
-            if len(serialized) > 900_000:
-                # Payload too large for native messaging (1MB host→extension limit).
-                # Strategy: Chunk encoded bytes and base64 each piece for safe JSON
-                # transport. The extension decodes and reassembles the original
-                # UTF-8 byte stream.
-                # This works in ALL environments (no HTTP fetch needed, no localhost
-                # network access required — pure native messaging).
-                chunk_messages = _chunk_native_payload(serialized, req_id)
-                total_chunks = len(chunk_messages)
-                sys.stderr.write(f"[Proxy] Large payload ({len(serialized)}B), sending in {total_chunks} chunks\n")
-                sys.stderr.flush()
-
-                for chunk_message in chunk_messages:
-                    outbound_sender(chunk_message)
-            else:
-                # Payload fits within native messaging limit — send inline
-                outbound_sender(message_payload)
-        except Exception as exc:
-            pending_requests.pop(req_id, None)
-            self._json_error(502, f"Native messaging bridge unavailable: {exc}")
-            return
-
-        # Wait for the response (up to 60s)
-        try:
-            resp = response_queue.get(timeout=60)
-        except Empty:
-            pending_requests.pop(req_id, None)
-            self._json_error(504, "Gateway Timeout — Canvas tab may be closed or unresponsive")
-            return
-
-        pending_requests.pop(req_id, None)
-
-        if resp.get('error'):
-            self._json_error(502, resp['error'])
-            return
-
-        try:
-            openai_response = gemini_to_openai(resp.get('data', {}), model)
-        except GeminiResponseError as exc:
-            self._json_error(502, str(exc), exc.details)
-            return
-
-        if stream:
-            self._send_streaming(openai_response, model)
-        else:
-            self._json_response(200, openai_response)
-
-    def _send_streaming(self, openai_response, model):
-        """Fake streaming — send as single chunk + [DONE].
-
-        Handles both text content and tool_calls in streaming format.
-        For tool_calls, we emit each call as a separate delta chunk
-        (matching OpenAI's streaming protocol for tool calls), followed
-        by a final chunk with finish_reason="tool_calls".
-        """
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/event-stream')
-        self.send_header('Cache-Control', 'no-cache')
-        self.send_header('Connection', 'close')
-        self._send_cors_header()
-        self.end_headers()
-
-        choice = openai_response["choices"][0]
-        message = choice["message"]
-        finish_reason = choice.get("finish_reason", "stop")
-        tool_calls = message.get("tool_calls")
-
-        if tool_calls:
-            # ── Stream tool_calls (OpenAI streaming format) ───────────────
-            # Each tool call is sent as a delta with an index. The first
-            # chunk includes the role. Arguments may be split across chunks
-            # in real OpenAI streaming, but we send them all at once since
-            # our proxy fakes streaming (single Gemini response).
-
-            # First chunk: role + first tool call name
-            first_tc = tool_calls[0]
-            delta = {
-                "role": "assistant",
-                "tool_calls": [{
-                    "index": 0,
-                    "id": first_tc["id"],
-                    "type": "function",
-                    "function": {
-                        "name": first_tc["function"]["name"],
-                        "arguments": first_tc["function"]["arguments"]
-                    }
-                }]
-            }
-            chunk = {
-                "id": openai_response["id"],
-                "object": "chat.completion.chunk",
-                "model": model,
-                "choices": [{"index": 0, "delta": delta, "finish_reason": None}]
-            }
-            self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-
-            # Additional tool calls (if multiple)
-            for i, tc in enumerate(tool_calls[1:], 1):
-                delta = {
-                    "tool_calls": [{
-                        "index": i,
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["function"]["name"],
-                            "arguments": tc["function"]["arguments"]
-                        }
-                    }]
-                }
-                chunk = {
-                    "id": openai_response["id"],
-                    "object": "chat.completion.chunk",
-                    "model": model,
-                    "choices": [{"index": 0, "delta": delta, "finish_reason": None}]
-                }
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-
-            # Final chunk: finish_reason = "tool_calls"
-            done_chunk = {
-                "id": openai_response["id"],
-                "object": "chat.completion.chunk",
-                "model": model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
-            }
-            self.wfile.write(f"data: {json.dumps(done_chunk)}\n\n".encode())
-        else:
-            # ── Stream text content ───────────────────────────────────────
-            content = message.get("content") or ""
-            chunk = {
-                "id": openai_response["id"],
-                "object": "chat.completion.chunk",
-                "model": model,
-                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
-            }
-            self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-
-            done_chunk = {
-                "id": openai_response["id"],
-                "object": "chat.completion.chunk",
-                "model": model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]
-            }
-            self.wfile.write(f"data: {json.dumps(done_chunk)}\n\n".encode())
-
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
-
-    def _json_response(self, code, data):
-        body = json.dumps(data).encode('utf-8')
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self._send_cors_header()
-        self.send_header('Content-Length', str(len(body)))
+    def _json(self, status, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self._cors_headers()
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _json_error(self, code, message, details=None, authenticate=False):
-        error = {"message": message, "type": "proxy_error"}
+    def _error(self, status, message, details=None, authenticate=False):
+        error = {"message": message, "type": "proxy_error", "code": status}
         if details:
             error["details"] = details
-        body = json.dumps({"error": error}).encode('utf-8')
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self._send_cors_header()
+        body = json.dumps({"error": error}).encode("utf-8")
+
+        # The request body may not have been read (413, 411, bad auth). If the
+        # connection stayed alive, the unread bytes would be parsed as the next
+        # request line — so every error closes the connection.
+        self.close_connection = True
+
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Connection", "close")
+        self._cors_headers()
         if authenticate:
-            self.send_header('WWW-Authenticate', 'Bearer')
-        self.send_header('Content-Length', str(len(body)))
+            self.send_header("WWW-Authenticate", 'Bearer realm="gemini-canvas-proxy"')
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_cors_header(self):
-        request_origin = self.headers.get('Origin')
-        allowed_origin = os.environ.get('PROXY_ALLOWED_ORIGIN', '').strip()
-        if allowed_origin and request_origin == allowed_origin:
-            self.send_header('Access-Control-Allow-Origin', allowed_origin)
-            self.send_header('Vary', 'Origin')
+    def _log_access(self, status, model, started, mode):
+        log("%d %s %s %.2fs", status, model, mode, time.monotonic() - started)
 
-    def log_message(self, *args):
-        """Suppress HTTP logs — writing to stdout corrupts native messaging."""
-        pass
+    def log_message(self, format, *args):  # noqa: A002 - stdlib signature
+        """Silence the stdlib access log; _log_access writes the useful line."""
+
+    def log_error(self, format, *args):  # noqa: A002 - stdlib signature
+        log("http error: " + (format % args if args else format))
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# MAIN LOOP
-# ═══════════════════════════════════════════════════════════════════════════
+# ───────────────────────────────────────────────────────────────────────────
+# Entry points
+# ───────────────────────────────────────────────────────────────────────────
+
+def run_stdio_bridge(socket_path, port):
+    """Native-messaging side of the split Docker deployment."""
+    connection = connect_bridge_socket(socket_path)
+    log("bridge-only mode connected to %s", socket_path)
+
+    def socket_to_stdio():
+        try:
+            while True:
+                message = read_socket_message(connection)
+                if message is None:
+                    break
+                send_message(message)
+        except Exception as exc:  # noqa: BLE001 - the pump ends, main() cleans up
+            warn("socket -> stdio pump stopped: %s", exc)
+        finally:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    threading.Thread(target=socket_to_stdio, daemon=True).start()
+    send_message({"type": "host_ready", "port": port, "protocol": PROTOCOL_VERSION})
+
+    while True:
+        message = read_message()
+        if message is None:
+            break
+        write_socket_message(connection, message)
+    connection.close()
+
 
 def main():
     global outbound_sender
-    port = int(os.environ.get('PROXY_PORT', '8765'))
-    socket_path = os.environ.get(
-        'PROXY_SOCKET',
-        '/tmp/gemini-canvas-proxy.sock'
+
+    parser = argparse.ArgumentParser(
+        description="OpenAI-compatible HTTP API backed by Gemini Canvas.",
+        allow_abbrev=False,
     )
-    bridge_only = '--bridge-only' in sys.argv
-    http_only = '--http-only' in sys.argv
-    if bridge_only and http_only:
-        raise SystemExit("--bridge-only and --http-only are mutually exclusive")
+    role = parser.add_mutually_exclusive_group()
+    role.add_argument("--http-only", action="store_true",
+                      help="serve HTTP and accept one bridge on a Unix socket")
+    role.add_argument("--bridge-only", action="store_true",
+                      help="pump native messaging stdio to the Unix socket")
+    args = parser.parse_args()
 
-    if bridge_only:
-        connection = _connect_bridge_socket(socket_path)
-        sys.stderr.write(f"[Proxy] Bridge-only mode connected to {socket_path}\n")
-        sys.stderr.flush()
-
-        def socket_to_native():
-            try:
-                while True:
-                    message = _read_socket_message(connection)
-                    if message is None:
-                        break
-                    send_message(message)
-            finally:
-                try:
-                    connection.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-
-        threading.Thread(target=socket_to_native, daemon=True).start()
-        send_message({"type": "host_ready", "port": port})
-        while True:
-            message = read_message()
-            if message is None:
-                break
-            _write_socket_message(connection, message)
-        connection.close()
-        return
-
-    # --standalone mode: run HTTP server without native messaging
-    # Useful for debugging or when the extension bridge isn't needed.
-    # The extension can still connect if it discovers the port.
-    standalone = '--standalone' in sys.argv
-
-    # Start HTTP server in a proper thread (not daemon — we want clean shutdown)
-    # 0.0.0.0 allows Tailscale/VPS access only when explicitly requested.
-    bind_address = os.environ.get('PROXY_BIND', '127.0.0.1')
-    server = ThreadedHTTPServer((bind_address, port), APIHandler)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-
-    if http_only:
-        outbound_sender = _send_to_bridge_socket
-        threading.Thread(
-            target=_serve_bridge_socket,
-            args=(socket_path,),
-            daemon=True
-        ).start()
-        sys.stderr.write(
-            f"[Proxy] HTTP-only mode on http://{bind_address}:{port}\n"
-        )
-        sys.stderr.flush()
-        threading.Event().wait()
-        return
-
-    if standalone:
-        sys.stderr.write(f"[Proxy] Standalone mode — HTTP server on http://{bind_address}:{port}\n")
-        if bind_address == '0.0.0.0':
-            sys.stderr.write("[Proxy] WARNING: Listening on 0.0.0.0 (all interfaces). Bearer authentication is required.\n")
-        sys.stderr.write(f"[Proxy] No native messaging — use curl or point any tool at the URL above\n")
-        sys.stderr.flush()
-        return
-
-    if bind_address == '0.0.0.0':
-        sys.stderr.write("[Proxy] Warning: HTTP server listening on 0.0.0.0 (all interfaces). Bearer authentication is required.\n")
-        sys.stderr.flush()
-
-    # Tell the extension we're ready
     try:
-        send_message({"type": "host_ready", "port": port})
-    except Exception:
-        # stdout pipe broken — extension may have closed
-        sys.stderr.write("[Proxy] Failed to send host_ready, staying alive for HTTP\n")
-        sys.stderr.flush()
+        port = env_int("PROXY_PORT", DEFAULT_PORT, minimum=1, maximum=65535)
+        bind = os.environ.get("PROXY_BIND", "127.0.0.1").strip() or "127.0.0.1"
+        socket_path = os.environ.get("PROXY_SOCKET", "/tmp/gemini-canvas-proxy.sock")
+    except ConfigError as exc:
+        log("configuration error: %s", exc)
+        return 2
 
-    # Main loop: read messages from the extension
+    if args.bridge_only:
+        try:
+            run_stdio_bridge(socket_path, port)
+        except Exception as exc:  # noqa: BLE001 - report and exit non-zero for Chrome
+            log("bridge-only mode failed: %s", exc)
+            return 1
+        return 0
+
+    server = ThreadedHTTPServer((bind, port), APIHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    log("HTTP listening on http://%s:%d", bind, port)
+    if bind not in ("127.0.0.1", "localhost", "::1"):
+        warn("listening on %s; the bearer token is the only access control", bind)
+
+    if args.http_only:
+        outbound_sender = send_to_bridge
+        try:
+            serve_bridge_socket(socket_path)
+        except Exception as exc:  # noqa: BLE001 - nothing useful happens without it
+            log("bridge socket failed: %s", exc)
+            return 1
+        return 0
+
+    # Bare metal: Chrome launched us, so stdio is the bridge.
+    try:
+        send_message({
+            "type": "host_ready",
+            "port": port,
+            "protocol": PROTOCOL_VERSION,
+        })
+    except (BrokenPipeError, OSError):
+        log("Chrome closed the native port at startup; HTTP stays up until it returns")
+
     while True:
         try:
-            msg = read_message()
-        except Exception:
+            message = read_message()
+        except ValueError as exc:
+            warn("dropping malformed native message: %s", exc)
+            continue
+        except Exception as exc:  # noqa: BLE001 - stdin failure ends the loop
+            log("stdin failed: %s", exc)
             break
-        if msg is None:
+        if message is None:
             break
+        route_bridge_message(message)
 
-        _route_bridge_response(msg)
-
-    # stdin closed — extension disconnected, but keep HTTP server alive
-    # for a bit so in-flight requests can complete
-    sys.stderr.write("[Proxy] Extension disconnected, HTTP server shutting down\n")
-    sys.stderr.flush()
+    log("native port closed; shutting down")
     server.shutdown()
+    return 0
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    sys.exit(main())

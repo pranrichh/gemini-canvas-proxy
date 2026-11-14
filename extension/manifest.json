@@ -1,8 +1,9 @@
 {
     "manifest_version": 3,
     "name": "Gemini Canvas Proxy Bridge",
-    "version": "1.0.0",
-    "description": "Routes API requests through Gemini Canvas for free unlimited inference. Uses a private MessageChannel bridge — no WebSocket or Local Network Access issues.",
+    "version": "2.0.0",
+    "description": "Relays requests from a local OpenAI-compatible endpoint to a Gemini Canvas page over a private MessageChannel.",
+    "minimum_chrome_version": "120",
     "permissions": [
         "alarms",
         "storage",
