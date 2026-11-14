@@ -1,4 +1,4 @@
-name: Tests
+name: tests
 
 on:
   push:
@@ -10,6 +10,11 @@ permissions:
 jobs:
   unittest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.8 is the documented floor, 3.12 is what the container ships.
+        python-version: ["3.8", "3.12"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -17,7 +22,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Run tests
         run: python3 -m unittest discover -s tests -v
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check docs against the source
+        run: python3 scripts/check_docs.py .

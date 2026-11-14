@@ -269,8 +269,12 @@ class GeminiToOpenAITests(unittest.TestCase):
             "RECITATION": "content_filter",
             "BLOCKLIST": "content_filter",
             "PROHIBITED_CONTENT": "content_filter",
+            "SPII": "content_filter",
+            "IMAGE_SAFETY": "content_filter",
+            "LANGUAGE": "content_filter",
             "OTHER": "stop",
             "MALFORMED_FUNCTION_CALL": "stop",
+            "UNEXPECTED_TOOL_CALL": "stop",
         }
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
@@ -283,8 +287,20 @@ class GeminiToOpenAITests(unittest.TestCase):
                         }]
                     }, "gemini-test")
                     self.assertEqual(result["choices"][0]["finish_reason"], target)
-        self.assertIn("OTHER", stderr.getvalue())
-        self.assertIn("MALFORMED_FUNCTION_CALL", stderr.getvalue())
+        # Every documented reason is mapped, so none of them should warn.
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_unknown_finish_reason_warns_and_falls_back_to_stop(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = proxy.gemini_to_openai({
+                "candidates": [{
+                    "content": {"parts": [{"text": "value"}]},
+                    "finishReason": "SOMETHING_NEW",
+                }]
+            }, "gemini-test")
+        self.assertEqual(result["choices"][0]["finish_reason"], "stop")
+        self.assertIn("SOMETHING_NEW", stderr.getvalue())
 
     def test_empty_candidates_raise_with_safety_details(self):
         with self.assertRaises(proxy.GeminiResponseError) as raised:
@@ -365,7 +381,7 @@ class ChunkingTests(unittest.TestCase):
             separators=(",", ":"),
         ).encode("utf-8")
 
-        chunks = proxy._chunk_native_payload(serialized, payload["id"])
+        chunks = proxy.chunk_request(serialized, payload["id"])
         reassembled = b"".join(
             base64.b64decode(chunk["chunk_data"])
             for chunk in chunks
@@ -375,7 +391,7 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(reassembled, serialized)
         for chunk in chunks:
             encoded = json.dumps(chunk, separators=(",", ":")).encode("utf-8")
-            self.assertLessEqual(len(encoded), proxy.MAX_NATIVE_MESSAGE_BYTES)
+            self.assertLessEqual(len(encoded), proxy.MAX_HOST_TO_BROWSER_BYTES)
 
 
 if __name__ == "__main__":
