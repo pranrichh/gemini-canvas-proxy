@@ -36,7 +36,18 @@ function isCanvasFrame(source, origin) {
   const direct = Array.from(document.querySelectorAll('iframe'))
     .some((iframe) => iframe.contentWindow === source);
   if (direct) return 'direct';
-  if (origin === 'null' && source) return 'sandboxed';
+
+  // Canvas serves the preview from a blob: URL on Google's usercontent domain,
+  // sometimes nested rather than a direct child of this document. A cross-origin
+  // wrapper cannot be walked, so the origin is what identifies it. This is the
+  // permissive rule the working v1 content script used; the port is the only
+  // thing a frame can obtain here, and the page still has to speak the protocol.
+  if (source && typeof origin === 'string') {
+    if (origin === 'null') return 'sandboxed';
+    if (/\.usercontent\.goog$/.test(origin) || origin === 'https://gemini.google.com') {
+      return 'usercontent';
+    }
+  }
   return null;
 }
 
