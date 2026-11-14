@@ -5,20 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gemini Canvas Proxy</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
   :root {
-    --bg: #0d0f11;
-    --surface: #15181b;
-    --surface-2: #1a1e22;
-    --line: #262b30;
-    --text: #e8ecef;
-    --muted: #98a2a9;
-    --faint: #6d777e;
-    --accent: #e0a458;
-    --warn: #d9a441;
-    --danger: #e0685c;
-    --sans: "IBM Plex Sans", "Cantarell", "Ubuntu", "DejaVu Sans", system-ui, sans-serif;
+    --bg: #07080c;
+    --surface: #11141a;
+    --surface-2: #171b22;
+    --line: #232a33;
+
+    --text: #e9edf2;
+    --muted: #98a3b0;
+    --faint: #6b7683;
+
+    /* from the logo */
+    --pink: #ff2e93;
+    --orange: #ff9a28;
+    --gold: #ffd800;
+    --ok: #9be15d;
+    --cyan: #10f4ff;
+    --blue: #2b46ff;
+
+    /* state: grey / green / red, nothing else */
+    --idle: #66707c;
+    --bad: #ff5f5f;
+
+    --sans: "Space Grotesk", "Cantarell", "Ubuntu", "DejaVu Sans", system-ui, sans-serif;
     --mono: "IBM Plex Mono", "Ubuntu Mono", "DejaVu Sans Mono", ui-monospace, monospace;
   }
 
@@ -26,7 +37,7 @@
 
   html, body {
     margin: 0;
-    padding: 0;
+    min-height: 100%;
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
@@ -35,78 +46,131 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  /* A field of coloured dust. The canvas is transparent and particles fade
+     against it, so the page background shows through rather than a black
+     rectangle sitting on top of it. */
+  .dust {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  /* Barely-there vignette: enough to settle the middle of the page without
+     hiding the field. */
+  .veil {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      /* A darkened column where the content lives, so the field stays at the
+         margins instead of showing through the text. */
+      linear-gradient(90deg,
+        rgba(7, 8, 12, 0) 0%,
+        rgba(7, 8, 12, 0.62) 9%,
+        rgba(7, 8, 12, 0.86) 24%,
+        rgba(7, 8, 12, 0.88) 76%,
+        rgba(7, 8, 12, 0.62) 91%,
+        rgba(7, 8, 12, 0) 100%),
+      radial-gradient(120% 90% at 50% 0%, rgba(7, 8, 12, 0.55) 0%, rgba(7, 8, 12, 0.18) 45%, transparent 75%);
+  }
+
   .panel {
-    max-width: 820px;
+    position: relative;
+    z-index: 1;
+    max-width: 860px;
     margin: 0 auto;
-    padding: 30px 22px 44px;
+    padding: 30px 22px 48px;
   }
 
   /* ── header ───────────────────────────────────────────────── */
 
   .head {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--line);
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    flex-wrap: wrap;
   }
 
-  .brand {
+  /* The mark carries the name, so no wordmark is repeated beside it. */
+  .mark {
+    width: 62px;
+    height: 62px;
+    display: block;
+    filter: drop-shadow(0 6px 26px rgba(255, 46, 147, 0.28));
+  }
+
+
+
+  /* ── banner ───────────────────────────────────────────────── */
+
+  /* The animated banner from the project README, embedded as-is: same service
+     output, same Bitcount face, same gold on deep blue. An <img> keeps the
+     SVG's own styles and SMIL timeline isolated from the page. */
+  .banner {
+    display: block;
+    height: 50px;
+    width: auto;
+    max-width: 100%;
+    border-radius: 5px;
+  }
+
+  /* ── state ────────────────────────────────────────────────── */
+
+  .status { margin-top: 22px; text-align: center; }
+
+  .status-word {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 9px;
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.005em;
-  }
-
-  /* LOGO SLOT — replace this svg with the project mark. Rendered at 16×16;
-     keep it inline so the page makes no image request. */
-  .brand svg { width: 16px; height: 16px; flex: none; color: var(--accent); }
-
-  .endpoint {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--faint);
-    white-space: nowrap;
-    padding-top: 2px;
-  }
-
-  .state {
-    display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 14px;
-  }
-
-  .state-word {
-    font-size: 18px;
-    font-weight: 600;
+    font-size: 17px;
+    font-weight: 500;
     letter-spacing: -0.01em;
+  }
+
+  .status-word code {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 400;
     color: var(--text);
   }
 
-  .state[data-state="degraded"] .state-word { color: var(--warn); }
-  .state[data-state="down"] .state-word { color: var(--danger); }
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--idle);
+    flex: none;
+  }
 
-  .state-note {
+  /* Grey until there is evidence; green only when the whole chain is up. */
+  .status[data-state="ready"] .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(155, 225, 93, 0.20); }
+  .status[data-state="ready"] .status-word { color: var(--ok); }
+  .status[data-state="degraded"] .dot { background: var(--idle); }
+  .status[data-state="down"] .dot { background: var(--bad); box-shadow: 0 0 0 3px rgba(255, 95, 95, 0.18); }
+  .status[data-state="down"] .status-word { color: var(--bad); }
+
+  .status-note {
+    margin-top: 4px;
     font-size: 13px;
     color: var(--muted);
+    min-height: 20px;
   }
 
   /* ── signal path ──────────────────────────────────────────── */
 
+  /* Same language as the stats: a line with segments, not a card. */
   .path {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-top: 20px;
-    padding: 16px 18px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 4px;
+    gap: 12px;
+    margin-top: 18px;
+    padding: 14px 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
   }
 
   .node { min-width: 0; }
@@ -119,18 +183,6 @@
     color: var(--muted);
   }
 
-  .dia {
-    width: 7px;
-    height: 7px;
-    flex: none;
-    transform: rotate(45deg);
-    border: 1px solid var(--faint);
-    background: transparent;
-  }
-
-  .node[data-on="1"] .dia { border-color: var(--accent); background: var(--accent); }
-  .node[data-on="0"] .dia { border-color: var(--danger); background: transparent; }
-
   .node-value {
     margin-top: 3px;
     font-family: var(--mono);
@@ -141,25 +193,65 @@
     text-overflow: ellipsis;
   }
 
-  .node[data-on="0"] .node-value { color: var(--danger); }
+  .node[data-on="1"] .node-value { color: var(--ok); }
+  .node[data-on="0"] .node-value { color: var(--bad); }
+  .node[data-on="1"] .dot { background: var(--ok); }
+  .node[data-on="0"] .dot { background: var(--bad); }
 
   .wire {
-    flex: 1 1 24px;
-    height: 1px;
-    min-width: 16px;
+    position: relative;
+    flex: 1 1 30px;
+    min-width: 22px;
+    height: 2px;
     background: var(--line);
+    overflow: visible;
+    /* A failure starts from the healthy state and drains to red rather than
+       switching instantly, which reads as "this just broke" instead of "this
+       was always red". */
+    transition: background-color 900ms ease, opacity 900ms ease;
   }
 
-  .wire[data-on="1"] { background: var(--accent); opacity: 0.45; }
-
-  .wire[data-pending="1"] {
-    background: repeating-linear-gradient(90deg, var(--faint) 0 4px, transparent 4px 8px);
-    animation: crawl 1.2s linear infinite;
+  .wire[data-on="1"] {
+    background-image: linear-gradient(90deg,
+      rgba(155, 225, 93, 0.25) 0%, var(--ok) 45%, rgba(155, 225, 93, 0.25) 90%);
+    background-size: 220% 100%;
+    background-color: var(--ok);
+    opacity: 0.9;
+    animation: flow 2.4s linear infinite;
   }
 
-  @keyframes crawl { to { background-position: 8px 0; } }
+  @keyframes flow {
+    from { background-position: 0% 0; }
+    to   { background-position: 220% 0; }
+  }
+
+  .wire[data-on="0"][data-broken="1"] { background-color: var(--bad); background-image: none; opacity: 0.6; }
+
+  /* An arrow that travels the connector while the link is being established.
+     It is the only motion on the page that is not a response to the reader. */
+  .wire .arrow {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 16px;
+    height: 8px;
+    margin-top: -4px;
+    background: var(--ok);
+    clip-path: polygon(0 50%, 62% 0, 62% 36%, 100% 36%, 100% 64%, 62% 64%, 62% 100%);
+    opacity: 0;
+  }
+
+  .wire[data-pending="1"] .arrow { opacity: 1; animation: slice 1.5s cubic-bezier(.45, .05, .35, .95) infinite; }
+
+  @keyframes slice {
+    0%   { transform: translateX(-18px); opacity: 0; }
+    18%  { opacity: 1; }
+    82%  { opacity: 1; }
+    100% { transform: translateX(var(--travel, 120px)); opacity: 0; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .wire[data-pending="1"] { animation: none; }
+    .wire[data-pending="1"] .arrow { animation: none; opacity: 0.6; transform: translateX(40%); }
   }
 
   /* ── stats ────────────────────────────────────────────────── */
@@ -167,20 +259,26 @@
   .stats {
     display: flex;
     flex-wrap: wrap;
-    align-items: baseline;
-    margin-top: 14px;
-    padding: 12px 2px;
+    align-items: center;
+    margin-top: 16px;
+    padding: 10px 2px;
+    border-top: 1px solid var(--line);
     border-bottom: 1px solid var(--line);
     font-size: 13px;
     color: var(--muted);
   }
 
   .stat {
-    display: flex;
+    display: inline-flex;
     align-items: baseline;
     gap: 5px;
-    padding: 0 14px;
+    padding: 2px 15px;
     border-left: 1px solid var(--line);
+    background: none;
+    border-top: 0; border-right: 0; border-bottom: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
   }
 
   .stat:first-child { padding-left: 0; border-left: 0; }
@@ -193,7 +291,36 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .stat.is-bad b { color: var(--danger); }
+  .stat b.ok { color: var(--ok); }
+  .stat b.bad { color: var(--bad); }
+  .stat b.idle { color: var(--idle); }
+
+  .stat-tokens { cursor: pointer; }
+  .stat-tokens:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 4px; }
+
+  /* Animating max-width clips the last glyph once the content is wider than
+     the ceiling, which is how "35k" became "35". A 0fr -> 1fr grid column
+     expands to the content's own width, so nothing can be cut off. */
+  .stat-tokens .split {
+    display: grid;
+    grid-template-columns: 0fr;
+    opacity: 0;
+    transition: grid-template-columns 320ms cubic-bezier(.4, 0, .2, 1), opacity 200ms ease, margin 320ms ease;
+  }
+
+  .stat-tokens .split-inner {
+    overflow: hidden;
+    white-space: nowrap;
+    display: block;
+  }
+
+  .stat-tokens[aria-expanded="true"] .split {
+    grid-template-columns: 1fr;
+    opacity: 1;
+    margin-left: 8px;
+  }
+
+  .stat-tokens .split b { color: var(--cyan); }
 
   /* ── activity ─────────────────────────────────────────────── */
 
@@ -202,7 +329,7 @@
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    margin-top: 22px;
+    margin-top: 20px;
     font-size: 13px;
     color: var(--muted);
   }
@@ -220,15 +347,15 @@
   }
 
   .log-head button:hover { color: var(--text); }
-  .log-head button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .log-head button:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
 
-  .rows { margin-top: 6px; }
+  .rows { margin-top: 4px; }
 
   .row { border-bottom: 1px solid var(--line); }
 
   .row-toggle {
     display: grid;
-    grid-template-columns: 62px minmax(0, 1fr) 44px 58px 56px 16px;
+    grid-template-columns: 62px minmax(0, 1fr) 44px 56px 56px 18px;
     gap: 12px;
     align-items: baseline;
     width: 100%;
@@ -242,42 +369,82 @@
   }
 
   .row-toggle:hover { background: var(--surface); }
-  .row-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .row-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
 
   .c-time { font-family: var(--mono); font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
   .c-model { font-family: var(--mono); font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .c-code { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .c-code.ok { color: var(--text); }
-  .c-code.bad { color: var(--danger); }
+  .c-code { font-family: var(--mono); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+  .c-code.ok { color: var(--ok); }
+  .c-code.bad { color: var(--bad); }
   .c-ms { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; }
   .c-tok { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; }
-  .c-open { font-size: 11px; line-height: 1; color: var(--muted); text-align: right; }
+  .c-open { font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: right; }
 
-  .row.is-error .c-model { color: var(--danger); }
+  .row.is-error .c-model { color: var(--bad); }
 
-  .detail {
-    display: none;
-    padding: 2px 2px 14px 74px;
-  }
-
+  .detail { display: none; padding: 2px 2px 16px 74px; }
   .row[data-open="1"] .detail { display: block; }
 
-  .detail dl {
-    margin: 0;
+  .dl {
     display: grid;
-    grid-template-columns: 72px minmax(0, 1fr);
+    grid-template-columns: 66px minmax(0, 1fr);
     gap: 3px 14px;
     font-family: var(--mono);
     font-size: 12px;
     line-height: 1.55;
   }
 
-  .detail dt { color: var(--faint); }
-  .detail dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+  .dl dt { color: var(--faint); }
+  .dl dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
 
-  .detail pre {
+  .output {
     grid-column: 1 / -1;
-    margin: 6px 0 0;
+    margin: 8px 0 0;
+    padding: 12px 13px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--cyan);
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 240px;
+    overflow: auto;
+  }
+
+  .output.is-image { padding: 8px; line-height: 0; text-align: center; }
+  .output img { max-width: 100%; max-height: 320px; border-radius: 3px; }
+
+  .detail audio { grid-column: 1 / -1; margin-top: 10px; width: 100%; height: 34px; }
+
+  .audio-meta {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  .more { grid-column: 1 / -1; margin-top: 10px; }
+
+  .more summary {
+    font-size: 12px;
+    color: var(--faint);
+    cursor: pointer;
+    list-style: none;
+    width: fit-content;
+    padding: 2px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+
+  .more summary::-webkit-details-marker { display: none; }
+  .more summary:hover { color: var(--text); }
+  .more summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+
+  .more pre {
+    margin: 8px 0 0;
     padding: 10px 12px;
     max-height: 220px;
     overflow: auto;
@@ -292,36 +459,11 @@
     word-break: break-word;
   }
 
-  .detail audio { grid-column: 1 / -1; margin-top: 8px; width: 100%; height: 32px; }
+  .detail pre::-webkit-scrollbar, .output::-webkit-scrollbar { width: 8px; }
+  .detail pre::-webkit-scrollbar-thumb, .output::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 
-  .audio-length {
-    grid-column: 1 / -1;
-    margin-top: 4px;
-    font-size: 11px;
-    color: var(--faint);
-  }
-
-  .more { grid-column: 1 / -1; margin-top: 6px; }
-
-  .more summary {
-    font-size: 12px;
-    color: var(--faint);
-    cursor: pointer;
-    list-style: none;
-    width: fit-content;
-    border-bottom: 1px dashed var(--line);
-    padding-bottom: 1px;
-  }
-
-  .more summary::-webkit-details-marker { display: none; }
-  .more summary:hover { color: var(--text); }
-  .more summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-
-  .detail pre::-webkit-scrollbar { width: 8px; }
-  .detail pre::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
-
-  .empty { padding: 26px 2px; font-size: 13px; color: var(--muted); }
-  .empty code { font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .empty { padding: 28px 2px; font-size: 13px; color: var(--muted); }
+  .empty code { font-family: var(--mono); font-size: 12px; color: var(--cyan); }
 
   .boot-error {
     margin-top: 14px;
@@ -329,70 +471,276 @@
     font-family: var(--mono);
     font-size: 12px;
     line-height: 1.5;
-    color: var(--danger);
-    border: 1px solid var(--danger);
-    border-radius: 3px;
+    color: var(--bad);
+    border: 1px solid var(--bad);
+    border-radius: 4px;
     white-space: pre-wrap;
   }
 
-  @media (max-width: 620px) {
-    .path { flex-wrap: wrap; gap: 6px; }
+  @media (max-width: 640px) {
+    .path { flex-wrap: wrap; gap: 8px; }
     .wire { display: none; }
     .node { width: 100%; }
-    .row-toggle { grid-template-columns: 54px minmax(0, 1fr) 44px 16px; }
+    .row-toggle { grid-template-columns: 54px minmax(0, 1fr) 44px 18px; }
     .c-ms, .c-tok { display: none; }
     .detail { padding-left: 2px; }
   }
 </style>
 </head>
 <body>
+<canvas class="dust" id="dust" aria-hidden="true"></canvas>
+<div class="veil" aria-hidden="true"></div>
+
 <main class="panel">
   <header class="head">
-    <div class="brand">
-      <!-- LOGO SLOT -->
-      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path d="M8 1.2 9.9 6.1 14.8 8 9.9 9.9 8 14.8 6.1 9.9 1.2 8 6.1 6.1Z"
-              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-      </svg>
-      <span>Gemini Canvas Proxy</span>
-    </div>
-    <div class="endpoint" id="endpoint"></div>
+    <span class="mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1932 1932" width="100%" height="100%">
+  <defs>
+    <!-- Star outline -->
+    <path id="lg-star" d="M925 100 Q935 62 965 62 Q995 62 1005 100
+      C1050 290 1150 480 1300 630
+      C1480 780 1680 880 1835 925 Q1870 940 1868 965 Q1870 990 1835 1005
+      C1680 1050 1480 1150 1300 1300
+      C1150 1450 1050 1640 1005 1830 Q995 1868 965 1868 Q935 1868 925 1830
+      C880 1640 780 1450 630 1300
+      C450 1150 250 1050 95 1005 Q62 990 62 965 Q62 940 95 925
+      C250 880 450 780 630 630
+      C780 480 880 290 925 100 Z"/>
+    <clipPath id="lg-starClip"><use href="#lg-star"/></clipPath>
+    <clipPath id="lg-outerClip"><circle cx="965" cy="965" r="490"/></clipPath>
+    <clipPath id="lg-innerClip"><circle cx="965" cy="965" r="445"/></clipPath>
+
+    <filter id="lg-b30" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="30"/></filter>
+    <filter id="lg-b15" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="15"/></filter>
+    <filter id="lg-b50" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="50"/></filter>
+    <filter id="lg-b6" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="4"/></filter>
+
+    <!-- Star spike gradients -->
+    <linearGradient id="lg-gTop" gradientUnits="userSpaceOnUse" x1="0" y1="65" x2="0" y2="620">
+      <stop offset="0" stop-color="#ffa6dc"/>
+      <stop offset="0.25" stop-color="#ff5cae"/>
+      <stop offset="0.6" stop-color="#ff1f86"/>
+      <stop offset="1" stop-color="#ff40a8"/>
+    </linearGradient>
+    <linearGradient id="lg-gRight" gradientUnits="userSpaceOnUse" x1="1300" y1="0" x2="1868" y2="0">
+      <stop offset="0" stop-color="#0010ff"/>
+      <stop offset="0.6" stop-color="#1030ff"/>
+      <stop offset="1" stop-color="#8a98ff"/>
+    </linearGradient>
+    <linearGradient id="lg-gLeft" gradientUnits="userSpaceOnUse" x1="62" y1="0" x2="640" y2="0">
+      <stop offset="0" stop-color="#ffc060"/>
+      <stop offset="0.2" stop-color="#ff9a28"/>
+      <stop offset="0.7" stop-color="#ff8a18"/>
+      <stop offset="1" stop-color="#ff7a20"/>
+    </linearGradient>
+    <linearGradient id="lg-gBottom" gradientUnits="userSpaceOnUse" x1="0" y1="1300" x2="0" y2="1868">
+      <stop offset="0" stop-color="#a8ff40"/>
+      <stop offset="0.3" stop-color="#58ff38"/>
+      <stop offset="0.7" stop-color="#3aa844"/>
+      <stop offset="1" stop-color="#6a9a6c"/>
+    </linearGradient>
+    <linearGradient id="lg-gYellowBL" gradientUnits="userSpaceOnUse" x1="250" y1="1000" x2="800" y2="1500">
+      <stop offset="0" stop-color="#ffd830" stop-opacity="0.6"/>
+      <stop offset="0.5" stop-color="#ffff30"/>
+      <stop offset="1" stop-color="#c0ff40"/>
+    </linearGradient>
+    <linearGradient id="lg-gBlueBR" gradientUnits="userSpaceOnUse" x1="1000" y1="1450" x2="1300" y2="1250">
+      <stop offset="0" stop-color="#30b0c0"/>
+      <stop offset="0.5" stop-color="#2a90e0"/>
+      <stop offset="1" stop-color="#1a40ff"/>
+    </linearGradient>
+    <linearGradient id="lg-gLavender" gradientUnits="userSpaceOnUse" x1="1040" y1="400" x2="1300" y2="600">
+      <stop offset="0" stop-color="#ff88ee" stop-opacity="0"/>
+      <stop offset="0.35" stop-color="#ff90f0"/>
+      <stop offset="0.7" stop-color="#c0a0ff"/>
+      <stop offset="1" stop-color="#2040ff"/>
+    </linearGradient>
+
+    <!-- Ring gradients: sectors -->
+    <linearGradient id="lg-rTop" gradientUnits="userSpaceOnUse" x1="640" y1="0" x2="1290" y2="0">
+      <stop offset="0" stop-color="#ff4a50"/>
+      <stop offset="0.3" stop-color="#ff70d8"/>
+      <stop offset="0.55" stop-color="#d890ff"/>
+      <stop offset="0.8" stop-color="#4aa0ff"/>
+      <stop offset="1" stop-color="#00b8ff"/>
+    </linearGradient>
+    <linearGradient id="lg-rLeft" gradientUnits="userSpaceOnUse" x1="0" y1="640" x2="0" y2="1290">
+      <stop offset="0" stop-color="#ff3a40"/>
+      <stop offset="0.25" stop-color="#ff8420"/>
+      <stop offset="0.5" stop-color="#ffd800"/>
+      <stop offset="0.8" stop-color="#9aff30"/>
+      <stop offset="1" stop-color="#40ff60"/>
+    </linearGradient>
+    <linearGradient id="lg-rBottom" gradientUnits="userSpaceOnUse" x1="640" y1="0" x2="1290" y2="0">
+      <stop offset="0" stop-color="#7cff3a"/>
+      <stop offset="0.4" stop-color="#20f0a0"/>
+      <stop offset="0.7" stop-color="#10d8f0"/>
+      <stop offset="1" stop-color="#3a9cff"/>
+    </linearGradient>
+    <linearGradient id="lg-rRight" gradientUnits="userSpaceOnUse" x1="0" y1="640" x2="0" y2="1290">
+      <stop offset="0" stop-color="#10a8ff"/>
+      <stop offset="0.35" stop-color="#6060ff"/>
+      <stop offset="0.6" stop-color="#a040ff"/>
+      <stop offset="1" stop-color="#3090ff"/>
+    </linearGradient>
+
+    <!-- Inner disc gradients -->
+    <linearGradient id="lg-dTop" gradientUnits="userSpaceOnUse" x1="560" y1="0" x2="1420" y2="0" gradientTransform="rotate(20 965 965)">
+      <stop offset="0" stop-color="#10f4ff"/>
+      <stop offset="0.3" stop-color="#10f4ff"/>
+      <stop offset="0.45" stop-color="#20c010"/>
+      <stop offset="0.6" stop-color="#e8c000"/>
+      <stop offset="0.72" stop-color="#ffa000"/>
+      <stop offset="0.9" stop-color="#ffd800"/>
+      <stop offset="1" stop-color="#ffee00"/>
+    </linearGradient>
+    <linearGradient id="lg-dBottom" gradientUnits="userSpaceOnUse" x1="560" y1="0" x2="1420" y2="0" gradientTransform="rotate(20 965 965)">
+      <stop offset="0" stop-color="#0000f4"/>
+      <stop offset="0.3" stop-color="#0000f0"/>
+      <stop offset="0.42" stop-color="#ff00c8"/>
+      <stop offset="0.52" stop-color="#ff1010"/>
+      <stop offset="0.64" stop-color="#ff8000"/>
+      <stop offset="0.8" stop-color="#ffd800"/>
+      <stop offset="1" stop-color="#ffee00"/>
+    </linearGradient>
+    <linearGradient id="lg-dFade" gradientUnits="userSpaceOnUse" x1="0" y1="860" x2="0" y2="1160">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="1"/>
+    </linearGradient>
+    <mask id="lg-dMask"><rect x="500" y="500" width="930" height="930" fill="url(#lg-dFade)"/></mask>
+    <linearGradient id="lg-dLeftMid" gradientUnits="userSpaceOnUse" x1="520" y1="0" x2="900" y2="0">
+      <stop offset="0" stop-color="#00f0ff"/>
+      <stop offset="0.5" stop-color="#40ff90"/>
+      <stop offset="1" stop-color="#60ff90" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="lg-dRightMid" gradientUnits="userSpaceOnUse" x1="1000" y1="0" x2="1420" y2="0">
+      <stop offset="0" stop-color="#ffb000" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffd800"/>
+      <stop offset="1" stop-color="#ffff00"/>
+    </linearGradient>
+
+    <!-- Arrow gradients -->
+    <linearGradient id="lg-arrow" gradientUnits="userSpaceOnUse" x1="610" y1="0" x2="1325" y2="0">
+      <stop offset="0" stop-color="#66ff99"/>
+      <stop offset="0.12" stop-color="#5af8a0"/>
+      <stop offset="0.35" stop-color="#3a9cff"/>
+      <stop offset="0.6" stop-color="#1448ff"/>
+      <stop offset="0.85" stop-color="#0010ff"/>
+      <stop offset="1" stop-color="#0000ff"/>
+    </linearGradient>
+    <linearGradient id="lg-bevelU" gradientUnits="userSpaceOnUse" x1="1040" y1="740" x2="1190" y2="830">
+      <stop offset="0" stop-color="#4040b0"/>
+      <stop offset="1" stop-color="#2a60b8"/>
+    </linearGradient>
+    <linearGradient id="lg-bevelL" gradientUnits="userSpaceOnUse" x1="890" y1="1190" x2="740" y2="1100">
+      <stop offset="0" stop-color="#0a8aa8"/>
+      <stop offset="1" stop-color="#1a78b0"/>
+    </linearGradient>
+    <linearGradient id="lg-gapGlow" gradientUnits="userSpaceOnUse" x1="610" y1="0" x2="1325" y2="0">
+      <stop offset="0" stop-color="#ffb000" stop-opacity="0"/>
+      <stop offset="0.15" stop-color="#ff40a0" stop-opacity="0.7"/>
+      <stop offset="0.3" stop-color="#ff9a10"/>
+      <stop offset="0.7" stop-color="#ffd000"/>
+      <stop offset="1" stop-color="#ffff00"/>
+    </linearGradient>
+  </defs>
+
+  
+
+  <!-- STAR -->
+  <g clip-path="url(#lg-starClip)">
+    <g filter="url(#lg-b30)">
+      <polygon points="560,-100 1380,-100 1380,640 965,965 560,640" fill="url(#lg-gTop)"/>
+      <polygon points="1290,560 2030,560 2030,1370 1290,1370 965,965" fill="url(#lg-gRight)"/>
+      <polygon points="-100,560 640,560 965,965 640,1370 -100,1370" fill="url(#lg-gLeft)"/>
+      <polygon points="560,1290 1380,1290 1380,2030 560,2030" fill="url(#lg-gBottom)"/>
+      <polygon points="-100,1000 700,1100 900,1500 560,1700 -100,1400" fill="url(#lg-gYellowBL)"/>
+      <polygon points="1000,1500 1250,1250 1400,1350 1150,1700" fill="url(#lg-gBlueBR)"/>
+      <polygon points="1030,380 1180,420 1330,640 1200,640" fill="url(#lg-gLavender)" opacity="0.9"/>
+    </g>
+  </g>
+
+  <g transform="translate(965 965) scale(0.968) translate(-965 -965)">
+  <!-- Ring -->
+  <g clip-path="url(#lg-outerClip)">
+    <g filter="url(#lg-b15)">
+      <rect x="640" y="440" width="650" height="260" fill="url(#lg-rTop)"/>
+      <rect x="440" y="640" width="260" height="650" fill="url(#lg-rLeft)"/>
+      <rect x="640" y="1230" width="650" height="260" fill="url(#lg-rBottom)"/>
+      <rect x="1230" y="640" width="260" height="650" fill="url(#lg-rRight)"/>
+      <circle cx="680" cy="680" r="90" fill="#ff4050"/>
+      <circle cx="1300" cy="660" r="80" fill="#10b0ff"/>
+      <circle cx="1280" cy="1290" r="80" fill="#38a0ff"/>
+      <circle cx="680" cy="1280" r="90" fill="#a8ff30"/>
+    </g>
+  </g>
+
+  <!-- Inner disc -->
+  <g clip-path="url(#lg-innerClip)">
+    <rect x="500" y="500" width="930" height="930" fill="url(#lg-dTop)"/>
+    <g filter="url(#lg-b6)">
+      <rect x="500" y="500" width="930" height="930" fill="url(#lg-dBottom)" mask="url(#lg-dMask)"/>
+    </g>
+    <rect x="500" y="640" width="400" height="330" fill="url(#lg-dLeftMid)" opacity="0.9" filter="url(#lg-b30)"/>
+    <rect x="1000" y="700" width="430" height="300" fill="url(#lg-dRightMid)" opacity="0.85" filter="url(#lg-b30)"/>
+    <ellipse cx="1330" cy="800" rx="150" ry="120" fill="#ffc000" opacity="0.7" filter="url(#lg-b30)"/>
+    <ellipse cx="900" cy="1010" rx="260" ry="40" fill="#ff7a60" opacity="0.5" filter="url(#lg-b30)"/>
+    <ellipse cx="760" cy="1020" rx="130" ry="50" fill="#1020ff" opacity="0.8" filter="url(#lg-b15)"/>
+    <ellipse cx="700" cy="1260" rx="180" ry="120" fill="#0000f0" filter="url(#lg-b30)"/>
+  </g>
+  <!-- thin inner edge highlight -->
+  <circle cx="965" cy="965" r="445" fill="none" stroke="#2a78c8" stroke-opacity="0.35" stroke-width="4"/>
+
+  <!-- Gap between arrows -->
+  <rect x="610" y="945" width="715" height="42" fill="url(#lg-gapGlow)" filter="url(#lg-b6)"/>
+
+  <!-- Upper arrow -->
+  <polygon points="610,840 1115,838 1038,772 1048,722 1170,714 1325,845 1325,942 610,948" fill="url(#lg-arrow)"/>
+  <polygon points="1048,722 1195,812 1115,838 1038,772" fill="url(#lg-bevelU)"/>
+
+  <!-- Lower arrow -->
+  <polygon points="1324,1090 819,1092 896,1158 886,1208 764,1216 609,1085 609,988 1324,982" fill="url(#lg-arrow)"/>
+  <polygon points="886,1208 739,1118 819,1092 896,1158" fill="url(#lg-bevelL)"/>
+<metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYTowYmJlNGU4My1lMWMxLTQyODQtYWNkMy0wNjQwZGYxZWQzNGEAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaD8FVHvaL4eQBhXti4EyOA8AAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDoxNDY4OGM4Yy1mZjBmLTRiYmYtYTI2YS0wMDE0Nzg3ZjBjYmVscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNoyuBbhLpemvan9N99uJ1PHgAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggrGl3cAWjaQN7fBnRPAuwEmp6eeTNFw50Ab6CIxX8MmKkZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaIEEaeNtcpu2w2qy4BXNNBgAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRMAAAAAAAAAAAAAAAAZGhhc2hYICP/OXBh5iEkWP0oi/naBtgijZiHtvGjlmgxJ5BZWjJCZG5hbWVuanVtYmYgbWFuaWZlc3RqZXhjbHVzaW9uc4GiZXN0YXJ0GSqPZmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOjBiYmU0ZTgzLWUxYzEtNDI4NC1hY2QzLTA2NDBkZjFlZDM0YS9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOjExMDJkYzIzLWUyOGItNDBiYy1iZGZkLTQ4MjMxZmViNDdlMnJjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCCsaXdwBaNpA3t8GdE8C7ASanp55M0XDnQBvoIjFfwyYqJjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFgg2s+kULUjtzNs6l+fbISwb8Oni5X9TecMkAwVchbPu2GiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggRHaZMuxCz2oUzEyuAsUwcyarwvvu8Yg1kSNSS9mUdQ10Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQKhFfZI0kpIeOifhc3BX1SZEcGNTVXntupa0BdRJERcmL2ImdG+EGcO1ntQFkqSGelVQD+NKES9+wd4E2DQzOgk=</c2pa:manifest></metadata>  </g>
+<metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYTpjYmRkMTg0NS1iMDczLTRhNDEtODFkMy1kODYxMjJlM2FhMDkAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaIu7k2DQM/2jKrMe1nm98LgAAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDo1ZGFhOTI4MC1kZmU1LTQ2YjMtYTQ5OS00ZDIxNTIwYmI4NjVscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNopHODBSyXx9lcd454m5rqOgAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFgg+zQPdK7XgvrJgpb8DN6kmjQuMf/ZlGhrEu+/ADNSxjSkZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaNBFUliwz0W5qPJN/eliS3sAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRMAAAAAAAAAAAAAAAAZGhhc2hYIHBb0WKTdLnKcVKkrsEqQnZ4drtS2XNU5yYHP3qMfpHKZG5hbWVuanVtYmYgbWFuaWZlc3RqZXhjbHVzaW9uc4GiZXN0YXJ0GUkVZmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOmNiZGQxODQ1LWIwNzMtNGE0MS04MWQzLWQ4NjEyMmUzYWEwOS9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOjAwZmFlNWVkLWFiM2MtNDVkOC04Njg3LTVkZmFiMDk4ODBiOHJjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCD7NA90rteC+smClvwM3qSaNC4x/9mUaGsS778AM1LGNKJjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFggXfDLWUtaHHrRr8tWhSa+IM+3pJ8tjBT4INK17SL6IvWiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggImLB+KzY/QlZ8sdLz9630Yujho3gDBNTKwF7NMfb8EV0Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQHPF9iNTCutcAGPdqYiBMdA6YmGyQfgIWL69oUxce35Bb+vVTLbGG3uu83HW88R3pQOpx+2wYCOMSZxyv3YSUz8=</c2pa:manifest></metadata></svg></span>
+    <img class="banner" id="banner" src="data:image/svg+xml;base64,PCEtLSBodHRwczovL2dpdGh1Yi5jb20vRGVudmVyQ29kZXIxL3JlYWRtZS10eXBpbmctc3ZnLyAtLT4KPHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnCiAgICB4bWxuczp4bGluaz0naHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluaycKICAgIHZpZXdCb3g9JzAgMCA1NjAgNTAnCiAgICBzdHlsZT0nYmFja2dyb3VuZC1jb2xvcjogIzFFNDBBRjsnCiAgICB3aWR0aD0nNTYwcHgnIGhlaWdodD0nNTBweCc+CgogICAgPHN0eWxlPgpAZm9udC1mYWNlIHsKICBmb250LWZhbWlseTogJ0JpdGNvdW50JzsKICBmb250LXN0eWxlOiBub3JtYWw7CiAgZm9udC13ZWlnaHQ6IDQwMDsKICBmb250LWRpc3BsYXk6IGZhbGxiYWNrOwogIHNyYzogdXJsKGRhdGE6Zm9udC90cnVldHlwZTtiYXNlNjQsQUFFQUFBQVFBUUFBQkFBQVIwUkZSZ0JCQUVFQUFBRjhBQUFBSWtkUVQxTkVkRXgxQUFBQkhBQUFBQjVIVTFWQ0lPTWxtd0FBQWtBQUFBQmVUMU12TW9WZ1lia0FBQUtnQUFBQVlGTlVRVlRDemxxY0FBQURBQUFBQUlCamJXRndBbWNEVUFBQUJBUUFBQUNVWjJGemNBQUFBQkFBQUFFVUFBQUFDR2RzZVdhampoYUVBQUFIakFBQUVlUm9aV0ZrS2QzODhnQUFBY1FBQUFBMmFHaGxZUWJQQXFFQUFBR2dBQUFBSkdodGRIaExaQURJQUFBRGdBQUFBSUpzYjJOaFJ1Qkx6UUFBQWZ3QUFBQkViV0Y0Y0FHT0Z0SUFBQUU4QUFBQUlHNWhiV1ZIL1hwSEFBQUVtQUFBQXZKd2IzTjAvNThBTWdBQUFWd0FBQUFnY0hKbGNHZ0dqSVVBQUFFTUFBQUFCN2dCLzRXd0JJMEFBQUVBQWYvL0FBOEFBUUFBQUFvQUhBQWNBQUZFUmt4VUFBZ0FCQUFBQUFELy93QUFBQUFBQUFBQkFBQUFJUUJRQUFRV2dBRWdBQUVBQUFBQUFBQUFBQUFBQUFBQVNBQUJBQU1BQUFBQUFBRC9uQUF5QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFRQUFBQXdBQUFBQUFBQUFBZ0FEQUFJQUR3QUJBQk1BRmdBQkFCZ0FHd0FCQUFBQUFRQUFBMGorbUFBQUJMRC9PUDg0QkV3QUFRQUFBQUFBQUFBQUFBQUFBQUFBQUNBQUFRQUFBQUVBQUJURUF5bGZEenoxQUFNRDZBQUFBQURqb1Z6WkFBQUFBT09oWE56L09QN1VCRXdEaEFBQUFBZ0FBZ0FBQUFBQUFBQUFBRkVBVVFDa0FPWUJLd0YxQWJjQ0JRSlNBcEVDM3dNWkEyY0RyUVAzQkRvRWdRVE1CUTBGVHdXYUJkZ0dId1pqQnFVRzN3Y21CM0FIZ1FlVkIrSUlaQWp5QUFFQUFBQUtBQ1FBTWdBQ1JFWk1WQUFPYkdGMGJnQU9BQVFBQUFBQS8vOEFBUUFBQUFGc2FXZGhBQWdBQUFBQkFBQUFBUUFFQUFRQUFBQUJBQWdBQVFBYUFBRUFDQUFDQUF3QUJnQWdBQUlBRUFBZkFBSUFEd0FCQUFFQURnQUFBQVFDWEFHUUFBVUFBQUtLQWxnQUFQKzFBb29DV0FBQUFWNEFNZ0RoQUFBQUFBQUpBQUFBQWdBQW9BQUFyMEFBSUVvQUFBQUFBQUFBQUZSUVZGSUF3QUFnQUhrRFNQNllBQUFENkFGb0lBQUFrd0FBQUFBQjlBSllBQUFBSUFBS0FBRUFBZ0FJQUFVQUFBQVVBQVFBQUFBOEFBSjNaMmgwQVFZQUFFVk1XRkFCQndBQlJVeFRTQUVJQUFKemJHNTBBUWtBQTBOU1UxWUJDZ0FFQURBQUlBQVVBQWdBQVFBQ0FBQUJId0FBQUFBQUFRQUJBQUFCSFFBQUFBQUFBd0FBQUFJQkVnR1FBQUFDdkFBQUFBUUFBZ0FBQVNBQUF3QUFBQUFBQkFBQWdBQUNXQUFBQWxnQUFBSllBQUFDV0FBQUFsZ0FBQUpZQUFBQ1dBQUFBbGdBQUFKWUFBQUNXQUFBQWxnQUFBSllBQUFDV0FBQUFsZ0FBQUpZQUFBQ1dBQUFBbGdBQUFKWUFBQUNXQUFBQWxnQUFBSllBQUFDV0FBQUFsZ0FBQUpZQUFBQ1dBQUFBbGdBQUFKWUFBQUNXQUFBQWxnQVpBSllBR1FBWkFBQUJMQUFBQUFBQUFBQUFBQUNBQUFBQXdBQUFCUUFBd0FCQUFBQUZBQUVBSUFBQUFBY0FCQUFBd0FNQUNBQUxRQTdBRUVBUXdCSEFFa0FVQUJtQUdrQWNBQjJBSG4vL3dBQUFDQUFMUUE3QUVFQVF3QkdBRWtBVHdCaEFHa0FiQUJ5QUhqLy8vL2gvKy8vNHYvQi84RC92dis5LzdqL3FQK20vNlQvby8raUFBRUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBRVFEU0FBTUFBUVFKQUFBQXdBRmdBQU1BQVFRSkFBRUFFQUZRQUFNQUFRUUpBQUlBRGdGQ0FBTUFBUVFKQUFNQU1nRVFBQU1BQVFRSkFBUUFJQUR3QUFNQUFRUUpBQVVBRmdEYUFBTUFBUVFKQUFZQUlBQzZBQU1BQVFRSkFBNEFOZ0NFQUFNQUFRUUpBUVlBREFCNEFBTUFBUVFKQVFjQUlnQldBQU1BQVFRSkFRZ0FHZ0E4QUFNQUFRUUpBUWtBQ2dBeUFBTUFBUVFKQVFvQURnQWtBQU1BQVFRSkFSSUFEZ0ZDQUFNQUFRUUpBUjBBQ0FBY0FBTUFBUVFKQVI4QURnQU9BQU1BQVFRSkFTQUFEZ0FBQUZVQWNBQnlBR2tBWndCb0FIUUFSQUJsQUdZQVlRQjFBR3dBZEFCUEFIQUFaUUJ1QUVNQWRRQnlBSE1BYVFCMkFHVUFVd0JzQUdFQWJnQjBBRVVBYkFCbEFHMEFaUUJ1QUhRQUlBQlRBR2dBWVFCd0FHVUFSUUJzQUdVQWJRQmxBRzRBZEFBZ0FFVUFlQUJ3QUdFQWJnQnpBR2tBYndCdUFGY0FaUUJwQUdjQWFBQjBBR2dBZEFCMEFIQUFjd0E2QUM4QUx3QnZBSEFBWlFCdUFHWUFid0J1QUhRQWJBQnBBR01BWlFCdUFITUFaUUF1QUc4QWNnQm5BRUlBYVFCMEFHTUFid0IxQUc0QWRBQXRBRklBWlFCbkFIVUFiQUJoQUhJQVZnQmxBSElBY3dCcEFHOEFiZ0FnQURFQUxnQXdBRUlBYVFCMEFHTUFid0IxQUc0QWRBQWdBRklBWlFCbkFIVUFiQUJoQUhJQU1RQXVBREFBT3dCVUFGQUFWQUJTQURzQVFnQnBBSFFBWXdCdkFIVUFiZ0IwQUMwQVVnQmxBR2NBZFFCc0FHRUFjZ0JTQUdVQVp3QjFBR3dBWVFCeUFFSUFhUUIwQUdNQWJ3QjFBRzRBZEFCREFHOEFjQUI1QUhJQWFRQm5BR2dBZEFBZ0FESUFNQUF5QURRQUlBQlVBR2dBWlFBZ0FFSUFhUUIwQUdNQWJ3QjFBRzRBZEFBZ0FGQUFjZ0J2QUdvQVpRQmpBSFFBSUFCQkFIVUFkQUJvQUc4QWNnQnpBQ0FBS0FCb0FIUUFkQUJ3QUhNQU9nQXZBQzhBWndCcEFIUUFhQUIxQUdJQUxnQmpBRzhBYlFBdkFIQUFaUUIwQUhJQWRnQmhBRzRBWWdCc0FHOEFhd0JzQUdFQWJnQmtBQzhBVkFCWkFGQUFSUUJVQUZJQUxRQkNBR2tBZEFCakFHOEFkUUJ1QUhRQUtRQUEvLzhBQVArY0FmUUNXQUFtQUI0QW5BQW1BQjRBQUFBbUFCNEFaQUFuQUI0QUFBRElBQ2NBSGdBQUFTd0FKd0FlQUFBQmtBQW5BQjRBQUFIMEFDWUFIbVNjQUNjQUhnQmtBZlFBSndBZUFNai9uQUFuQUI0QXlBSDBBQ2NBSGdFcy81d0FKd0FlQVN3QjlBQW5BQjRCa1ArY0FDY0FIZ0dRQUFBQUp3QWVBWkFBWkFBbkFCNEJrQURJQUNjQUhnR1FBU3dBSndBZUFaQUJrQUFIQUI0QmtBSDAvLzhBQUFBQUFmUUNXQUFtQUI0QUFBQW1BQjRBWkFBbkFCNEFBQURJQUNjQUhnQUFBU3dBSndBZUFBQUJrQUFuQUI0QVpBRElBQ2NBSGdCa0FmUUFKd0FlQU1nQXlBQW5BQjRBeUFIMEFDY0FIZ0VzQUFBQUp3QWVBU3dBWkFBbkFCNEJMQURJQUNjQUhnRXNBU3dBSndBZUFTd0JrQUFuQUI0QkxBSDBBQ2NBSGdHUUFBQUFKd0FlQVpBQVpBQW5BQjRCa0FESUFDY0FIZ0dRQVN3QUJ3QWVBWkFCa1AvL0FBQUFBQUgwQWxnQUpnQWVBR1FBSndBZUFBQUF5QUFuQUI0QUFBRXNBQ2NBSGdBQUFaQUFKZ0FlWkFBQUpnQWVaR1FBSndBZUFHUUF5QUFuQUI0QVpBRXNBQ2NBSGdCa0FaQUFKd0FlQUdRQjlBQW5BQjRBeUFBQUFDY0FIZ0RJQWZRQUp3QWVBU3dBQUFBbkFCNEJMQUgwQUNjQUhnR1FBR1FBQndBZUFaQUJrUC8vQUFBQUFBSDBBbGdBSmdBZUFBQUFKZ0FlQUdRQUp3QWVBQUFBeUFBbkFCNEFBQUVzQUNjQUhnQUFBWkFBSndBZUFBQUI5QUFtQUI1a0FBQW1BQjVrWkFBbkFCNEFaQURJQUNjQUhnQmtBU3dBSndBZUFHUUJrQUFuQUI0QVpBSDBBQ2NBSGdESUFNZ0FKd0FlQU1nQjlBQW5BQjRCTEFESUFDY0FIZ0VzQWZRQUJ3QWVBWkFCOVAvL0FBQUFBQUgwQWxnQUpnQWVBR1FBSndBZUFBQUF5QUFuQUI0QUFBRXNBQ2NBSGdBQUFaQUFKZ0FlWkFBQUpnQWVaR1FBSndBZUFHUUF5QUFuQUI0QVpBRXNBQ2NBSGdCa0FaQUFKd0FlQUdRQjlBQW5BQjRBeUFBQUFDY0FIZ0RJQWZRQUp3QWVBU3dBQUFBbkFCNEJMQURJQUNjQUhnRXNBZlFBSndBZUFaQUFaQUFuQUI0QmtBRElBQWNBSGdHUUFaRC8vd0FBQUFBQmtBSllBQ1lBSGdBQUFDY0FIZ0FBQWZRQUpnQWVaQUFBSmdBZVpHUUFKd0FlQUdRQXlBQW5BQjRBWkFFc0FDY0FIZ0JrQVpBQUp3QWVBR1FCOUFBbkFCNEF5QUFBQUNjQUhnRElBR1FBSndBZUFNZ0F5QUFuQUI0QXlBRXNBQ2NBSGdESUFaQUFKd0FlQU1nQjlBQW5BQjRCTEFBQUFBY0FIZ0VzQWZULy93QUFBQUFCOUFKWUFDWUFIZ0JrQUNjQUhnQUFBTWdBSndBZUFBQUJMQUFuQUI0QUFBR1FBQ1lBSG1RQUFDWUFIbVJrQUNjQUhnQmtBTWdBSndBZUFHUUJMQUFuQUI0QVpBR1FBQ2NBSGdCa0FmUUFKd0FlQU1nQUFBQW5BQjRBeUFIMEFDY0FIZ0VzQUFBQUp3QWVBU3dCa0FBbkFCNEJMQUgwQUNjQUhnR1FBR1FBSndBZUFaQUF5QUFuQUI0QmtBRXNBQWNBSGdHUUFaRC8vd0FBQUFBQjlBSllBQ1lBSGdBQUFDWUFIZ0JrQUNjQUhnQUFBTWdBSndBZUFBQUJMQUFuQUI0QUFBR1FBQ2NBSGdBQUFmUUFKZ0FlWkFBQUpnQWVaR1FBSndBZUFHUUF5QUFuQUI0QVpBRXNBQ2NBSGdCa0FaQUFKd0FlQUdRQjlBQW5BQjRBeUFESUFDY0FIZ0RJQWZRQUp3QWVBU3dBeUFBbkFCNEJMQUdRQUNjQUhnRXNBZlFBSndBZUFaQUJMQUFIQUI0QmtBR1EvLzhBQUFBQUFmUUI5QUFtQUI0QVpBQW1BQjVrQUFBbkFCNEFaQURJQUNjQUhnQmtBWkFBSndBZUFNZ0FBQUFuQUI0QXlBRElBQ2NBSGdESUFaQUFKd0FlQVN3QVpBQW5BQjRCTEFESUFDY0FIZ0VzQVN3QUp3QWVBU3dCa0FBbkFCNEJrQUFBQUNjQUhnR1FBR1FBSndBZUFaQUF5QUFIQUI0QmtBRXMvLzhBQUFBQUFmUUNXQUFtQUI0QVpBQW5BQjRBQUFESUFDY0FIZ0FBQVN3QUp3QWVBQUFCa0FBbkFCNEFBQUgwQUNZQUhtUUFBQ1lBSG1Sa0FDY0FIZ0JrQU1nQUp3QWVBR1FCTEFBbkFCNEFaQUdRQUNjQUhnQmtBZlFBSndBZUFNZ0FBQUFuQUI0QXlBR1FBQ2NBSGdFc0FBQUFKd0FlQVN3QkxBQW5BQjRCTEFHUUFDY0FIZ0dRQUdRQUp3QWVBWkFBeUFBSEFCNEJrQUVzLy84QUFBQUFBZlFCOUFBbUFCNEFaQUFuQUI0QUFBRElBQ2NBSGdBQUFTd0FKZ0FlWkFBQUpnQWVaR1FBSndBZUFHUUF5QUFuQUI0QVpBRXNBQ2NBSGdCa0FaQUFKd0FlQU1nQUFBQW5BQjRBeUFHUUFDY0FIZ0VzQUFBQUp3QWVBU3dCa0FBbkFCNEJrQUJrQUFjQUhnR1FBWkQvL3dBQUFBQUI5QUpZQUNZQUhnQmtBQ2NBSGdBQUFNZ0FKd0FlQUFBQkxBQW1BQjVrQUFBbUFCNWtaQUFuQUI0QVpBR1FBQ2NBSGdESUFBQUFKd0FlQU1nQmtBQW5BQjRCTEFCa0FDY0FIZ0VzQU1nQUp3QWVBU3dCTEFBbkFCNEJMQUdRQUNjQUhnRXNBZlFBSndBZUFaQUFBQUFuQUI0QmtBQmtBQ2NBSGdHUUFNZ0FKd0FlQVpBQkxBQW5BQjRCa0FHUUFBY0FIZ0dRQWZULy93QUFBQUFCOUFIMEFDWUFIZ0JrQUNjQUhnQUFBTWdBSndBZUFBQUJMQUFtQUI1a0FBQW1BQjVrWkFBbkFCNEFaQURJQUNjQUhnQmtBU3dBSndBZUFHUUJrQUFuQUI0QXlBQUFBQ2NBSGdESUFNZ0FKd0FlQU1nQmtBQW5BQjRCTEFBQUFDY0FIZ0VzQU1nQUp3QWVBU3dCa0FBbkFCNEJrQUFBQUNjQUhnR1FBTWdBQndBZUFaQUJMUC8vQUFBQUFBSDBBbGdBSmdBZUFBQUFKd0FlQUFBQkxBQW1BQjVrQUFBbUFCNWtaQUFuQUI0QVpBRElBQ2NBSGdCa0FTd0FKd0FlQUdRQmtBQW5BQjRBeUFBQUFDY0FIZ0RJQUdRQUp3QWVBTWdBeUFBbkFCNEF5QUVzQUNjQUhnRElBWkFBSndBZUFNZ0I5QUFuQUI0QkxBQUFBQ2NBSGdFc0FTd0FKd0FlQVN3QjlBQW5BQjRCa0FFc0FBY0FIZ0dRQWZULy93QUFBQUFCOUFLOEFDWUFIZ0FBQUNjQUhnQUFBWkFBSmdBZVpBQUFKd0FlQUdRQmtBQW5BQjRBeUFBQUFDY0FIZ0RJQUdRQUp3QWVBTWdBeUFBbkFCNEF5QUVzQUNjQUhnRElBWkFBSndBZUFNZ0NXQUFuQUI0QkxBQUFBQ2NBSGdFc0FHUUFKd0FlQVN3QXlBQW5BQjRCTEFFc0FDY0FIZ0VzQVpBQUJ3QWVBWkFBQVAvL0FBQUFBQUgwQWxnQUpnQWVBQUFBSndBZUFBQUI5QUFtQUI1a0FBQW5BQjRBWkFIMEFDY0FIZ0RJQUFBQUp3QWVBTWdBWkFBbkFCNEF5QURJQUNjQUhnRElBU3dBSndBZUFNZ0JrQUFuQUI0QXlBSDBBQ2NBSGdFc0FBQUFKd0FlQVN3QVpBQW5BQjRCTEFESUFDY0FIZ0VzQVN3QUp3QWVBU3dCa0FBbkFCNEJMQUgwQUFjQUhnR1FBQUQvL3dBQUFBQUI5QUgwQUNZQUhnQUFBQ1lBSGdCa0FDY0FIZ0FBQU1nQUp3QWVBQUFCTEFBbkFCNEFBQUdRQUNjQUhnQmtBU3dBSndBZUFHUUJrQUFuQUI0QXlBQUFBQ2NBSGdESUFHUUFKd0FlQU1nQXlBQW5BQjRBeUFFc0FDY0FIZ0RJQVpBQUp3QWVBU3dCTEFBbkFCNEJMQUdRQUNjQUhnR1FBQUFBSndBZUFaQUFaQUFuQUI0QmtBRElBQWNBSGdHUUFTei8vd0FBQUFBQjlBSDBBQ1lBSGdBQUFDWUFIZ0JrQUNjQUhnQUFBTWdBSndBZUFBQUJMQUFuQUI0QUFBR1FBQ1lBSG1RQUFDWUFIbVJrQUNjQUhnQmtBTWdBSndBZUFHUUJMQUFuQUI0QXlBR1FBQ2NBSGdFc0FTd0FKd0FlQVN3QmtBQW5BQjRCa0FBQUFDY0FIZ0dRQUdRQUp3QWVBWkFBeUFBSEFCNEJrQUVzLy84QUFBQUFBZlFCOUFBbUFCNEFaQUFuQUI0QUFBRElBQ2NBSGdBQUFTd0FKZ0FlWkFBQUpnQWVaR1FBSndBZUFHUUF5QUFuQUI0QVpBRXNBQ2NBSGdCa0FaQUFKd0FlQU1nQUFBQW5BQjRBeUFHUUFDY0FIZ0VzQUFBQUp3QWVBU3dCTEFBbkFCNEJMQUdRQUNjQUhnR1FBR1FBSndBZUFaQUF5QUFIQUI0QmtBRXMvLzhBQVArY0FmUUI5QUFtQUI0QW5BQW1BQjRBQUFBbUFCNEFaQUFuQUI0QUFBRElBQ2NBSGdBQUFTd0FKd0FlQUFBQmtBQW1BQjVrbkFBbUFCNWtBQUFtQUI1a1pBQW5BQjRBWkFESUFDY0FIZ0JrQVN3QUp3QWVBTWdBQUFBbkFCNEF5QUdRQUNjQUhnRXNBQUFBSndBZUFTd0JMQUFuQUI0QkxBR1FBQ2NBSGdHUUFHUUFKd0FlQVpBQXlBQUhBQjRCa0FFcy8vOEFBQUFBQWZRQjlBQW1BQjRBQUFBbkFCNEFBQUdRQUNZQUhtUUFBQ1lBSG1Sa0FDY0FIZ0JrQU1nQUp3QWVBR1FCTEFBbkFCNEFaQUdRQUNjQUhnRElBQUFBSndBZUFNZ0FaQUFuQUI0QXlBRElBQ2NBSGdESUFTd0FKd0FlQVN3QUFBQW5BQjRCTEFHUUFDY0FIZ0dRQVN3QUJ3QWVBWkFCa1AvL0FBQUFBQUgwQWZRQUpnQWVBQUFBSndBZUFBQUF5QUFuQUI0QUFBRXNBQ1lBSG1RQUFDY0FIZ0JrQU1nQUp3QWVBR1FCTEFBbkFCNEFaQUdRQUNjQUhnRElBQUFBSndBZUFNZ0F5QUFuQUI0QXlBR1FBQ2NBSGdFc0FBQUFKd0FlQVN3QVpBQW5BQjRCTEFESUFDY0FIZ0VzQVpBQUp3QWVBWkFBWkFBbkFCNEJrQURJQUFjQUhnR1FBWkQvL3dBQUFBQUI5QUpZQUNjQUhnQUFBWkFBSmdBZVpHUUFKd0FlQUdRQXlBQW5BQjRBWkFFc0FDY0FIZ0JrQVpBQUp3QWVBR1FCOUFBbkFCNEF5QUFBQUNjQUhnRElBR1FBSndBZUFNZ0F5QUFuQUI0QXlBRXNBQ2NBSGdESUFaQUFKd0FlQU1nQjlBQW5BQjRCTEFBQUFDY0FIZ0VzQVpBQUp3QWVBWkFBQUFBSEFCNEJrQUdRLy84QUFBQUFBZlFCOUFBbUFCNEFaQUFuQUI0QUFBRElBQ2NBSGdBQUFTd0FKd0FlQUFBQmtBQW1BQjVrQUFBbUFCNWtaQUFuQUI0QXlBQUFBQ2NBSGdFc0FHUUFKd0FlQVN3QXlBQW5BQjRCTEFFc0FDY0FIZ0VzQVpBQUp3QWVBWkFBQUFBbkFCNEJrQUJrQUNjQUhnR1FBTWdBSndBZUFaQUJMQUFIQUI0QmtBR1EvLzhBQUFBQUFmUUI5QUFtQUI0QVpBQW5BQjRBQUFESUFDY0FIZ0FBQVN3QUp3QWVBQUFCa0FBbUFCNWtBQUFtQUI1a1pBQW5BQjRBWkFESUFDY0FIZ0JrQVN3QUp3QWVBR1FCa0FBbkFCNEF5QUFBQUNjQUhnRXNBR1FBSndBZUFaQUF5QUFuQUI0QmtBRXNBQWNBSGdHUUFaRC8vd0FBQUFBQjlBSDBBQ1lBSGdBQUFDY0FIZ0FBQVN3QUp3QWVBQUFCa0FBbUFCNWtBQUFuQUI0QVpBRElBQ2NBSGdCa0FTd0FKd0FlQUdRQmtBQW5BQjRBeUFCa0FDY0FIZ0RJQU1nQUp3QWVBTWdCTEFBbkFCNEJMQUFBQUNjQUhnRXNBR1FBSndBZUFTd0F5QUFuQUI0QkxBR1FBQ2NBSGdHUUFBQUFKd0FlQVpBQVpBQUhBQjRCa0FHUS8vOEFBUCtjQWZRQjlBQW1BQjRBbkFBbkFCNEFBQURJQUNjQUhnQUFBU3dBSndBZUFBQUJrQUFtQUI1a25BQW1BQjVrWkFBbkFCNEFaQURJQUNjQUhnQmtBU3dBSndBZUFHUUJrQUFuQUI0QXlQK2NBQ2NBSGdESUFBQUFKd0FlQU1nQVpBQW5BQjRBeUFESUFDY0FIZ0VzQUFBQUp3QWVBWkFBWkFBbkFCNEJrQURJQUNjQUhnR1FBU3dBQndBZUFaQUJrUC8vQUdRQXlBR1FBU3dBSndBZUFHUUF5QUFuQUI0QXlBRElBQWNBSGdFc0FNai8vd0JrLzV3QkxBR1FBQ1lBSG1TY0FDY0FIZ0RJQUFBQUp3QWVBTWdBWkFBSEFCNEF5QUVzQUFRQUFBQUFBR1FBWkFBVEFDY0FPd0JQQUFBM0J5TWlMZ00xTlRjek1UZ0VNVEVITlRFNEJERXhNeGNWRkE0REl5TW5Oek15SGdNVkZRY2pNVGdFTVRFM0ZURTRCREV4SXljMU5ENERNek0wQVFFSkR3d0pCUUV6QkRNQkJRa01Ed2tCQVFFQkNROE1DUVVCTXdRekFRVUpEQThKQVFFQkJRa01Ed2tCQVRNekFRRUpEd3dKQldNQkJRa01Ed2tCQVRNekFRRUpEd3dKQmYvL0FBQUFBQVJNQWxnQUpnQWVBQUFBSndBZUFBQUJMQUFtQUI1a0FBQW1BQjVrWkFBbkFCNEFaQURJQUNjQUhnQmtBU3dBSndBZUFHUUJrQUFuQUI0QXlBQUFBQ2NBSGdESUFHUUFKd0FlQU1nQXlBQW5BQjRBeUFFc0FDY0FIZ0RJQVpBQUp3QWVBTWdCOUFBbkFCNEJMQUFBQUNjQUhnRXNBU3dBSndBZUFTd0I5QUFuQUI0QmtBRXNBQ2NBSGdHUUFmUUFKd0FlQWxnQUFBQW5BQjRDV0FFc0FDY0FIZ0s4QUFBQUp3QWVBcndCTEFBbkFCNERJQUFBQUNjQUhnTWdBR1FBSndBZUF5QUF5QUFuQUI0RElBRXNBQ2NBSGdNZ0FmUUFKd0FlQTRRQUFBQW5BQjREaEFCa0FDY0FIZ09FQU1nQUp3QWVBNFFCTEFBSEFCNEQ2QUFBLy84QUFBQUFCRXdDV0FBbUFCNEFBQUFuQUI0QUFBRXNBQ1lBSG1RQUFDWUFIbVJrQUNjQUhnQmtBTWdBSndBZUFHUUJMQUFuQUI0QVpBR1FBQ2NBSGdESUFBQUFKd0FlQU1nQVpBQW5BQjRBeUFESUFDY0FIZ0RJQVN3QUp3QWVBTWdCa0FBbkFCNEF5QUgwQUNjQUhnRXNBQUFBSndBZUFTd0JMQUFuQUI0QkxBSDBBQ2NBSGdHUUFTd0FKd0FlQVpBQjlBQW5BQjRDV0FBQUFDY0FIZ0pZQWZRQUp3QWVBcndBQUFBbkFCNEN2QUgwQUNjQUhnTWdBQUFBSndBZUF5QUFaQUFuQUI0RElBRElBQ2NBSGdNZ0FTd0FKd0FlQXlBQmtBQW5BQjRESUFIMEFDY0FIZ09FQUFBQUp3QWVBNFFBWkFBbkFCNERoQURJQUNjQUhnT0VBU3dBSndBZUE0UUJrQUFuQUI0RGhBSDBBQWNBSGdQb0FBQT0pIGZvcm1hdCgndHJ1ZXR5cGUnKTsKfQo8L3N0eWxlPgoKICAgICAgICAgICAgICAgICAgICA8cGF0aCBpZD0ncGF0aDAnPgogICAgICAgICAgICAgICAgICAgICAgICAgICAgPCEtLSBTaW5nbGUgbGluZSAtLT4KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA8YW5pbWF0ZSBpZD0nZDAnIGF0dHJpYnV0ZU5hbWU9J2QnIGJlZ2luPScwcztkMi5lbmQnCiAgICAgICAgICAgICAgICAgICAgZHVyPSc0ODAwbXMnIGZpbGw9J3JlbW92ZScKICAgICAgICAgICAgICAgICAgICB2YWx1ZXM9J20wLDI1IGgwIDsgbTAsMjUgaDU2MCA7IG0wLDI1IGg1NjAgOyBtMCwyNSBoMCcga2V5VGltZXM9JzA7MC42NjY2NjY2NjY2NjY2NzswLjgzMzMzMzMzMzMzMzMzOzEnIC8+CiAgICAgICAgICAgICAgICAgICAgPC9wYXRoPgogICAgPHRleHQgZm9udC1mYW1pbHk9JyJCaXRjb3VudCIsIG1vbm9zcGFjZScgZmlsbD0nI0ZGRDcwMCcgZm9udC1zaXplPScyNScKICAgICAgICBkb21pbmFudC1iYXNlbGluZT0nbWlkZGxlJwogICAgICAgIHg9JzUwJScgdGV4dC1hbmNob3I9J21pZGRsZScKICAgICAgICBsZXR0ZXItc3BhY2luZz0nbm9ybWFsJz4KICAgICAgICA8dGV4dFBhdGggeGxpbms6aHJlZj0nI3BhdGgwJz4KICAgICAgICAgICAg4pymIEdlbWluaSBDYW52YXMgUHJveHkg4pymCiAgICAgICAgPC90ZXh0UGF0aD4KICAgIDwvdGV4dD4KICAgICAgICA8cGF0aCBpZD0ncGF0aDEnPgogICAgICAgICAgICAgICAgICAgICAgICAgICAgPCEtLSBTaW5nbGUgbGluZSAtLT4KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA8YW5pbWF0ZSBpZD0nZDEnIGF0dHJpYnV0ZU5hbWU9J2QnIGJlZ2luPSdkMC5lbmQnCiAgICAgICAgICAgICAgICAgICAgZHVyPSc0ODAwbXMnIGZpbGw9J3JlbW92ZScKICAgICAgICAgICAgICAgICAgICB2YWx1ZXM9J20wLDI1IGgwIDsgbTAsMjUgaDU2MCA7IG0wLDI1IGg1NjAgOyBtMCwyNSBoMCcga2V5VGltZXM9JzA7MC42NjY2NjY2NjY2NjY2NzswLjgzMzMzMzMzMzMzMzMzOzEnIC8+CiAgICAgICAgICAgICAgICAgICAgPC9wYXRoPgogICAgPHRleHQgZm9udC1mYW1pbHk9JyJCaXRjb3VudCIsIG1vbm9zcGFjZScgZmlsbD0nI0ZGRDcwMCcgZm9udC1zaXplPScyNScKICAgICAgICBkb21pbmFudC1iYXNlbGluZT0nbWlkZGxlJwogICAgICAgIHg9JzUwJScgdGV4dC1hbmNob3I9J21pZGRsZScKICAgICAgICBsZXR0ZXItc3BhY2luZz0nbm9ybWFsJz4KICAgICAgICA8dGV4dFBhdGggeGxpbms6aHJlZj0nI3BhdGgxJz4KICAgICAgICAgICAg4pymIEZyZWUgdW5saW1pdGVkIEdlbWluaSBBUEkg4pymCiAgICAgICAgPC90ZXh0UGF0aD4KICAgIDwvdGV4dD4KICAgICAgICA8cGF0aCBpZD0ncGF0aDInPgogICAgICAgICAgICAgICAgICAgICAgICAgICAgPCEtLSBTaW5nbGUgbGluZSAtLT4KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA8YW5pbWF0ZSBpZD0nZDInIGF0dHJpYnV0ZU5hbWU9J2QnIGJlZ2luPSdkMS5lbmQnCiAgICAgICAgICAgICAgICAgICAgZHVyPSc0ODAwbXMnIGZpbGw9J3JlbW92ZScKICAgICAgICAgICAgICAgICAgICB2YWx1ZXM9J20wLDI1IGgwIDsgbTAsMjUgaDU2MCA7IG0wLDI1IGg1NjAgOyBtMCwyNSBoMCcga2V5VGltZXM9JzA7MC42NjY2NjY2NjY2NjY2NzswLjgzMzMzMzMzMzMzMzMzOzEnIC8+CiAgICAgICAgICAgICAgICAgICAgPC9wYXRoPgogICAgPHRleHQgZm9udC1mYW1pbHk9JyJCaXRjb3VudCIsIG1vbm9zcGFjZScgZmlsbD0nI0ZGRDcwMCcgZm9udC1zaXplPScyNScKICAgICAgICBkb21pbmFudC1iYXNlbGluZT0nbWlkZGxlJwogICAgICAgIHg9JzUwJScgdGV4dC1hbmNob3I9J21pZGRsZScKICAgICAgICBsZXR0ZXItc3BhY2luZz0nbm9ybWFsJz4KICAgICAgICA8dGV4dFBhdGggeGxpbms6aHJlZj0nI3BhdGgyJz4KICAgICAgICAgICAg4pymIGZvciBhbnkgT3BlbkFJLWNvbXBhdGlibGUgYXBwIOKcpgogICAgICAgIDwvdGV4dFBhdGg+CiAgICA8L3RleHQ+Cjwvc3ZnPgo=" alt="Gemini Canvas Proxy — free unlimited Gemini API for any OpenAI-compatible app" aria-hidden="true">
   </header>
 
-  <div class="state" id="state" data-state="ready" role="status" aria-live="polite">
-    <span class="state-word" id="state-word">Connecting</span>
-    <span class="state-note" id="state-note"></span>
+  <div class="status" id="status" data-state="degraded" role="status" aria-live="polite">
+    <div class="status-word"><span class="dot"></span><span id="status-word">Connecting</span></div>
+    <div class="status-note" id="status-note">Waiting for the relay.</div>
   </div>
 
   <section class="path" aria-label="Connection path">
     <div class="node" id="n-canvas" data-on="1">
-      <div class="node-top"><span class="dia"></span>Canvas page</div>
+      <div class="node-top"><span class="dot"></span>Canvas page</div>
       <div class="node-value" id="v-canvas">running</div>
     </div>
-    <div class="wire" id="w-relay" data-on="0" data-pending="1"></div>
+    <div class="wire" id="w-relay" data-on="0" data-pending="1"><span class="arrow"></span></div>
     <div class="node" id="n-relay" data-on="0">
-      <div class="node-top"><span class="dia"></span>Extension</div>
+      <div class="node-top"><span class="dot"></span>Extension</div>
       <div class="node-value" id="v-relay">waiting</div>
     </div>
-    <div class="wire" id="w-host" data-on="0"></div>
+    <div class="wire" id="w-host" data-on="0"><span class="arrow"></span></div>
     <div class="node" id="n-host" data-on="0">
-      <div class="node-top"><span class="dia"></span>Native host</div>
+      <div class="node-top"><span class="dot"></span>Native host</div>
       <div class="node-value" id="v-host">unknown</div>
     </div>
   </section>
 
   <section class="stats" aria-label="Session totals">
     <div class="stat"><b id="s-requests">0</b> requests</div>
-    <div class="stat"><b id="s-answered">0</b> answered</div>
-    <div class="stat" id="s-failed-wrap"><b id="s-failed">0</b> failed</div>
+    <div class="stat"><b id="s-answered" class="ok">0</b> answered</div>
+    <div class="stat"><b id="s-failed" class="idle">0</b> failed</div>
     <div class="stat"><b id="s-median">—</b> median</div>
-    <div class="stat"><b id="s-in">0</b> in</div>
-    <div class="stat"><b id="s-out">0</b> out</div>
-    <div class="stat"><b id="s-total">0</b> total</div>
+    <button type="button" class="stat stat-tokens" id="tok-btn" aria-expanded="false"
+            title="Split into input and output">
+      <b id="s-total">0</b> tokens
+      <span class="split"><span class="split-inner"><b id="s-in">0</b> in · <b id="s-out">0</b> out</span></span>
+    </button>
   </section>
 
   <div class="log-head">
-    <span id="log-count">No requests yet</span>
+    <span id="log-count"></span>
     <button type="button" id="clear">Clear</button>
   </div>
 
@@ -404,8 +752,7 @@ const apiKey = "";
 
 // Canvas transforms this page before serving it, and a bad transform throws
 // while the rest of the file is still loading. Without this the page looks
-// intact and simply never connects, which is indistinguishable from a broken
-// relay.
+// intact and simply never connects, which reads as a broken relay.
 window.addEventListener('error', function (event) {
   const panel = document.querySelector('.panel');
   if (!panel || document.getElementById('boot-error')) return;
@@ -476,7 +823,15 @@ function endpointUrl() {
   return 'http://127.0.0.1:' + (state.hostPort || 8765) + '/v1';
 }
 
-/* ── render ─────────────────────────────────────────────────────────────── */
+function pretty(value, limit) {
+  try {
+    return JSON.stringify(value, null, 1).slice(0, limit || 1600);
+  } catch (error) {
+    return String(value).slice(0, 400);
+  }
+}
+
+/* ── render: status ─────────────────────────────────────────────────────── */
 
 function setNode(node, valueNode, on, text) {
   node.dataset.on = on ? '1' : '0';
@@ -484,59 +839,72 @@ function setNode(node, valueNode, on, text) {
 }
 
 function renderStatus() {
-  $('endpoint').textContent = endpointUrl();
-
   let word = 'Ready';
   let note = 'Requests are being served.';
   let key = 'ready';
 
   if (!state.handshaked) {
     key = 'degraded';
-    word = 'Waiting for the extension';
-    note = 'The relay has not answered. Check that the extension is loaded and enabled.';
+    word = 'Connecting';
+    note = 'Waiting for the extension to answer.';
   } else if (!state.nativeConnected) {
     key = 'down';
-    word = 'Native host offline';
+    word = 'Host offline';
     note = state.hostError || 'Run ./setup.sh, then reload the extension.';
   }
 
-  $('state').dataset.state = key;
-  $('state-word').textContent = word;
-  $('state-note').textContent = note;
+  $('status').dataset.state = key;
+
+  if (key === 'ready') {
+    $('status-word').innerHTML = 'Ready at <code>' + endpointUrl() + '</code>';
+  } else {
+    $('status-word').textContent = word;
+  }
+  $('status-note').textContent = note;
 
   setNode($('n-canvas'), $('v-canvas'), true, 'running');
   setNode($('n-relay'), $('v-relay'), state.handshaked, state.handshaked ? 'relaying' : 'waiting');
   setNode($('n-host'), $('v-host'), state.nativeConnected, state.nativeConnected ? 'connected' : 'offline');
 
+  // The arrow only travels while a link is still being established.
   const relayWire = $('w-relay');
   relayWire.dataset.on = state.handshaked ? '1' : '0';
   relayWire.dataset.pending = state.handshaked ? '0' : '1';
+  relayWire.dataset.broken = '0';
 
   const hostWire = $('w-host');
   hostWire.dataset.on = state.nativeConnected ? '1' : '0';
-  hostWire.dataset.pending = '0';
+  hostWire.dataset.pending = state.handshaked && !state.nativeConnected ? '0' : '0';
+  hostWire.dataset.broken = state.handshaked && !state.nativeConnected ? '1' : '0';
 }
+
+/* ── render: stats ──────────────────────────────────────────────────────── */
 
 function renderStats() {
   $('s-requests').textContent = String(state.stats.requests);
-  $('s-answered').textContent = String(state.stats.answered);
-  $('s-failed').textContent = String(state.stats.failed);
-  $('s-failed-wrap').classList.toggle('is-bad', state.stats.failed > 0);
+
+  const answered = $('s-answered');
+  answered.textContent = String(state.stats.answered);
+  answered.className = state.stats.answered ? 'ok' : 'idle';
+
+  const failed = $('s-failed');
+  failed.textContent = String(state.stats.failed);
+  failed.className = state.stats.failed ? 'bad' : 'idle';
 
   const med = median(state.durations);
   $('s-median').textContent = med === null ? '—' : duration(med);
 
+  $('s-total').textContent = compact(state.stats.total);
   $('s-in').textContent = compact(state.stats.inbound);
   $('s-out').textContent = compact(state.stats.outbound);
-  $('s-total').textContent = compact(state.stats.total);
 
-  // The empty state already says there is nothing here; repeating it in the
-  // header read as two different kinds of nothing.
   $('log-count').textContent = state.rows.length
     ? state.rows.length + (state.rows.length === 1 ? ' request' : ' requests')
     : '';
   $('clear').hidden = !state.rows.length;
 }
+
+/* ── render: rows ───────────────────────────────────────────────────────── */
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -562,45 +930,67 @@ function buildRow(entry) {
   toggle.appendChild(el('span', 'c-open', '▾'));
 
   const detail = el('div', 'detail');
-  const dl = el('dl');
+  const dl = el('div', 'dl');
 
-  const addRow = (term, value) => {
+  const line = (term, value) => {
     dl.appendChild(el('dt', null, term));
     dl.appendChild(el('dd', null, value));
   };
 
-  addRow('request', entry.method + ' ' + entry.path);
+  line('request', entry.method + ' ' + entry.path);
   if (entry.usage) {
-    addRow('usage', entry.usage.prompt_tokens + ' in · '
+    line('usage', entry.usage.prompt_tokens + ' in · '
       + entry.usage.completion_tokens + ' out · '
       + entry.usage.total_tokens + ' total');
   }
-  if (entry.finish) addRow('finish', entry.finish);
-  if (entry.error) addRow('error', entry.error);
+  if (entry.finish) line('finish', entry.finish);
+  if (entry.error) line('error', entry.error);
+
+  // What came back, rendered as itself rather than described.
+  if (entry.image) {
+    const box = el('div', 'output is-image');
+    const img = document.createElement('img');
+    img.src = entry.image;
+    img.alt = 'generated image';
+    box.appendChild(img);
+    dl.appendChild(box);
+  } else if (entry.text) {
+    dl.appendChild(el('div', 'output', entry.text));
+  }
 
   if (entry.audio) {
     const audio = document.createElement('audio');
     audio.controls = true;
     audio.preload = 'metadata';
-    audio.src = 'data:' + entry.audio.mime_type + ';base64,' + entry.audio.data;
-    dl.appendChild(audio);
-
-    // Browsers report 0:00 until metadata loads, and a speech clip in a panel
-    // is small enough that knowing its length up front saves a play. 24 kHz
-    // mono 16-bit is fixed for these models, so the byte count is the duration.
-    if (entry.audio.seconds) {
-      const caption = el('div', 'audio-length', entry.audio.seconds.toFixed(1) + ' s of speech');
-      dl.appendChild(caption);
+    try {
+      const wav = pcmToWav(entry.audio.bytes, entry.audio.rate);
+      audio.src = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+    } catch (error) {
+      console.error('[proxy] audio', error);
     }
+    dl.appendChild(audio);
+    dl.appendChild(el('div', 'audio-meta',
+      'speech · ' + (entry.audio.seconds ? entry.audio.seconds.toFixed(1) + ' s · ' : '')
+      + entry.audio.mime_type));
   }
 
-  if (entry.body) {
+  if (entry.requestBody) {
     const more = document.createElement('details');
     more.className = 'more';
     const summary = document.createElement('summary');
-    summary.textContent = 'request body';
+    summary.textContent = 'request sent to Gemini';
     more.appendChild(summary);
-    more.appendChild(el('pre', null, entry.body));
+    more.appendChild(el('pre', null, entry.requestBody));
+    dl.appendChild(more);
+  }
+
+  if (entry.responseBody) {
+    const more = document.createElement('details');
+    more.className = 'more';
+    const summary = document.createElement('summary');
+    summary.textContent = 'raw response';
+    more.appendChild(summary);
+    more.appendChild(el('pre', null, entry.responseBody));
     dl.appendChild(more);
   }
 
@@ -630,7 +1020,7 @@ function renderRows() {
   if (!state.rows.length) {
     const empty = el('div', 'empty');
     empty.appendChild(el('div', null, 'No requests yet'));
-    const hint = el('div', null, 'Requests will appear here. Point a client at ');
+    const hint = el('div', null, 'Point a client at ');
     hint.appendChild(el('code', null, endpointUrl()));
     empty.appendChild(hint);
     host.appendChild(empty);
@@ -675,6 +1065,48 @@ function modelFromPath(path) {
   return match ? match[1] : 'unknown';
 }
 
+// Gemini returns raw PCM with no container. The host wraps it in a RIFF header
+// for API clients; the page receives the untouched payload, so it has to do the
+// same or the player reports 0:00 and refuses to play.
+function pcmToWav(bytes, sampleRate) {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  const text = (offset, value) => {
+    for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+
+  text(0, 'RIFF');
+  view.setUint32(4, 36 + bytes.length, true);
+  text(8, 'WAVE');
+  text(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, 'data');
+  view.setUint32(40, bytes.length, true);
+
+  const wav = new Uint8Array(44 + bytes.length);
+  wav.set(new Uint8Array(header), 0);
+  wav.set(bytes, 44);
+  return wav;
+}
+
+function base64ToBytes(data) {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function sampleRateFrom(mime) {
+  const match = /rate=(\d+)/.exec(mime || '');
+  return match ? Number(match[1]) : 24000;
+}
+
 function usageOf(payload) {
   const meta = (payload && payload.usageMetadata) || {};
   const prompt = meta.promptTokenCount || 0;
@@ -712,8 +1144,8 @@ function handleRequest(message) {
   const time = clock(new Date());
 
   // /diag asks this page what it can see. The page is the only part of the
-  // chain the host cannot inspect, and "the relay is down" and "the page is
-  // not running" look identical from outside.
+  // chain the host cannot inspect, and "the relay is down" and "the page is not
+  // running" look identical from outside.
   if (path === '/diag') {
     reply(id, {
       status: 200,
@@ -741,7 +1173,7 @@ function handleRequest(message) {
 
   const base = {
     time: time, model: modelFromPath(path), method: message.method || 'POST', path: path,
-    body: message.body ? JSON.stringify(message.body, null, 1).slice(0, 2000) : undefined
+    requestBody: message.body ? pretty(message.body) : undefined
   };
 
   if (stream) runStream(id, path, message.body, base, started);
@@ -764,15 +1196,39 @@ async function runBuffered(id, path, body, base, started) {
 
     if (!response.ok) {
       const detail = (payload.error && payload.error.message) || response.statusText || 'request failed';
-      record(Object.assign({}, base, { ok: false, code: response.status, ms: ms, error: detail, usage: null }));
+      record(Object.assign({}, base, {
+        ok: false, code: response.status, ms: ms, error: detail, usage: null,
+        responseBody: pretty(payload, 900)
+      }));
       reply(id, { status: response.status, data: payload, error: detail });
       return;
     }
 
     const candidate = (payload.candidates && payload.candidates[0]) || {};
     const parts = (candidate.content && candidate.content.parts) || [];
-    const speech = parts.filter((p) => p.inlineData
-      && String(p.inlineData.mimeType || '').indexOf('audio/') === 0)[0];
+
+    let output = '';
+    let image = null;
+    let speech = null;
+
+    for (const part of parts) {
+      if (typeof part.text === 'string' && part.text && !part.thought) output += part.text;
+      if (part.inlineData) {
+        const mime = String(part.inlineData.mimeType || '');
+        if (mime.indexOf('audio/') === 0) {
+          const bytes = base64ToBytes(part.inlineData.data);
+          const rate = sampleRateFrom(mime);
+          speech = {
+            mime_type: 'audio/wav',
+            bytes: bytes,
+            rate: rate,
+            seconds: Math.max(0, bytes.length / (rate * 2))
+          };
+        } else if (mime.indexOf('image/') === 0) {
+          image = 'data:' + mime + ';base64,' + part.inlineData.data;
+        }
+      }
+    }
 
     record(Object.assign({}, base, {
       ok: true,
@@ -780,11 +1236,10 @@ async function runBuffered(id, path, body, base, started) {
       ms: ms,
       usage: usageOf(payload),
       finish: FINISH_REASONS[String(candidate.finishReason || 'STOP').toUpperCase()] || 'stop',
-      audio: speech ? {
-        mime_type: 'audio/wav',
-        data: speech.inlineData.data,
-        seconds: Math.max(0, (speech.inlineData.data.length * 0.75 - 44) / 48000)
-      } : undefined
+      text: output || undefined,
+      image: image || undefined,
+      audio: speech || undefined,
+      responseBody: pretty(payload, 1200)
     }));
     reply(id, { status: response.status, data: payload, error: null });
   } catch (error) {
@@ -798,6 +1253,7 @@ async function runStream(id, path, body, base, started) {
   let finish = 'stop';
   let usage = null;
   let toolIndex = 0;
+  let output = '';
 
   try {
     const response = await fetch(buildUrl(path, true), {
@@ -811,7 +1267,7 @@ async function runStream(id, path, body, base, started) {
       let detail = response.statusText || 'stream failed';
       try { detail = JSON.parse(raw).error.message || detail; } catch (error) { /* keep status text */ }
       record(Object.assign({}, base, { ok: false, code: response.status,
-        ms: performance.now() - started, error: detail }));
+        ms: performance.now() - started, error: detail, responseBody: raw.slice(0, 900) }));
       streamEvent(id, { event: 'error', error: detail });
       return;
     }
@@ -838,6 +1294,7 @@ async function runStream(id, path, body, base, started) {
         const candidate = (event.candidates && event.candidates[0]) || {};
         for (const part of ((candidate.content && candidate.content.parts) || [])) {
           if (typeof part.text === 'string' && part.text && !part.thought) {
+            output += part.text;
             streamEvent(id, { event: 'delta', text: part.text });
           } else if (part.functionCall) {
             streamEvent(id, {
@@ -880,7 +1337,8 @@ async function runStream(id, path, body, base, started) {
   }
 
   record(Object.assign({}, base, {
-    ok: true, code: 200, ms: performance.now() - started, usage: usage, finish: finish
+    ok: true, code: 200, ms: performance.now() - started, usage: usage, finish: finish,
+    text: output || undefined
   }));
   streamEvent(id, { event: 'end', finish_reason: finish, usage: usage });
 }
@@ -889,8 +1347,8 @@ async function runStream(id, path, body, base, started) {
 
 // Canvas can render the preview more than once — a visible instance and an
 // offscreen one. Both would hand a port to the same relay, and the relay keeps
-// only the newest, so the two take turns stealing it and the panel goes stale
-// at random. Only the instance that is actually laid out may claim the port.
+// only the newest, so the two take turns stealing it. Only the instance that is
+// actually laid out may claim the port.
 function isDisplayed() {
   return window.innerWidth > 50 && window.innerHeight > 50;
 }
@@ -941,8 +1399,6 @@ function handshake() {
 
   // Address the top document. Canvas can nest the preview inside an
   // intermediate sandbox frame, and that frame has no relay to receive a port.
-  // A sandboxed frame cannot read its target's origin, so `*` is the only
-  // usable targetOrigin; the receiving side enforces the policy.
   const host = window.top || window.parent;
   host.postMessage({ source: 'gemini-proxy-ready' }, '*', [channel.port2]);
 
@@ -962,8 +1418,7 @@ function startHeartbeat() {
 
     if (state.missed >= MISSED_BEFORE_OFFLINE) {
       // Silence means the relay is gone: an extension reload or a recycled
-      // service worker tears down the world holding the port. Demote and try
-      // again, or the page stays dead until someone reloads the tab.
+      // service worker tears down the world holding the port.
       state.handshaked = false;
       state.nativeConnected = false;
       state.port = null;
@@ -973,6 +1428,185 @@ function startHeartbeat() {
     }
   }, PING_MS);
 }
+
+/* ── ambience ───────────────────────────────────────────────────────────── */
+
+// Coloured dust: a few hundred motes in the logo's palette, drifting on a slow
+// flow field and shoved aside by the pointer. Hand-rolled because the particle
+// libraries worth using are a few hundred kilobytes over a CDN, and a Canvas
+// preview cannot be relied on to fetch them.
+function startDust() {
+  const canvas = $('dust');
+  if (!canvas) return;
+
+  const context = canvas.getContext('2d');
+  if (!context) return;
+
+  const palette = [
+    [255, 46, 147], [255, 154, 40], [255, 216, 0],
+    [88, 255, 56], [16, 244, 255], [43, 70, 255],
+    [255, 255, 255]
+  ];
+
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const FPS = 40;
+  const FRAME_MS = 1000 / FPS;
+
+  let width = 0;
+  let height = 0;
+  let motes = [];
+  let pointer = { x: -9999, y: -9999 };
+  let frame = 0;
+  let previous = 0;
+
+  // Where the field is allowed to be dense. The dust is the page's texture, not
+  // its noise: it clusters around the mark and the banner and along the edges,
+  // and thins out under the text where it would only fight the words.
+  function densityAt(x, y) {
+    const edge = 110;
+    if (x < edge || x > width - edge || y < edge * 0.5 || y > height - edge * 0.5) return 1;
+    const inHero = y < 210 && Math.abs(x - width / 2) < 430;
+    if (inHero) return 1.15;
+    const inColumn = Math.abs(x - width / 2) < 440;
+    return inColumn ? 0.16 : 0.55;
+  }
+
+  function pickPoint() {
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      const x = Math.random() * width;
+      const y = Math.random() * height;
+      if (Math.random() < densityAt(x, y)) return { x: x, y: y };
+    }
+    return { x: Math.random() * width, y: Math.random() * height };
+  }
+
+  function seed() {
+    const count = Math.max(320, Math.min(1300, Math.round((width * height) / 1100)));
+    motes = new Array(count);
+
+    for (let i = 0; i < count; i += 1) {
+      const point = pickPoint();
+      const colour = palette[Math.floor(Math.random() * palette.length)];
+      const big = Math.random() > 0.93;
+
+      motes[i] = {
+        x: point.x,
+        y: point.y,
+        vx: (Math.random() - 0.5) * 0.25,
+        vy: (Math.random() - 0.5) * 0.25,
+        size: big ? 1.8 + Math.random() * 1.4 : 0.6 + Math.random() * 0.9,
+        colour: colour,
+        alpha: big ? 0.42 : 0.14 + Math.random() * 0.3,
+        twinkle: Math.random() * Math.PI * 2
+      };
+    }
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    seed();
+  }
+
+  function paint(time) {
+    // Fade rather than clear: the previous frame dims instead of vanishing,
+    // which gives each mote a short tail without keeping a buffer.
+    context.globalCompositeOperation = 'destination-out';
+    context.fillStyle = 'rgba(0, 0, 0, 0.14)';
+    context.fillRect(0, 0, width, height);
+
+    context.globalCompositeOperation = 'lighter';
+
+    for (const mote of motes) {
+      const angle = Math.sin(mote.x * 0.0032 + time * 0.00013)
+                  + Math.cos(mote.y * 0.0028 - time * 0.00009);
+
+      mote.vx += Math.cos(angle) * 0.020;
+      mote.vy += Math.sin(angle) * 0.020;
+
+      const dx = mote.x - pointer.x;
+      const dy = mote.y - pointer.y;
+      const distanceSquared = dx * dx + dy * dy;
+
+      if (distanceSquared < 26000 && distanceSquared > 1) {
+        const push = (1 - Math.sqrt(distanceSquared) / 161) * 0.9;
+        mote.vx += (dx / Math.sqrt(distanceSquared)) * push;
+        mote.vy += (dy / Math.sqrt(distanceSquared)) * push;
+      }
+
+      mote.vx *= 0.96;
+      mote.vy *= 0.96;
+      mote.x += mote.vx;
+      mote.y += mote.vy;
+
+      if (mote.x < -10) mote.x = width + 10;
+      if (mote.x > width + 10) mote.x = -10;
+      if (mote.y < -10) mote.y = height + 10;
+      if (mote.y > height + 10) mote.y = -10;
+
+      const flicker = reduced ? 1 : 0.82 + 0.18 * Math.sin(time * 0.0016 + mote.twinkle);
+      const [r, g, b] = mote.colour;
+      context.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (mote.alpha * flicker).toFixed(3) + ')';
+
+      if (mote.size > 1.6) {
+        context.beginPath();
+        context.arc(mote.x, mote.y, mote.size, 0, Math.PI * 2);
+        context.fill();
+      } else {
+        context.fillRect(mote.x, mote.y, mote.size, mote.size);
+      }
+    }
+  }
+
+  function loop(time) {
+    frame = requestAnimationFrame(loop);
+    if (time - previous < FRAME_MS - 1) return;
+    previous = time;
+    paint(time);
+  }
+
+  resize();
+  window.addEventListener('resize', resize, { passive: true });
+
+  if (reduced) {
+    // One static arrangement: the field is decorative, and motion is optional.
+    context.globalCompositeOperation = 'lighter';
+    paint(0);
+    return;
+  }
+
+  window.addEventListener('pointermove', (event) => {
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+  }, { passive: true });
+
+  window.addEventListener('pointerleave', () => { pointer.x = -9999; pointer.y = -9999; }, { passive: true });
+
+  // Nothing to animate while the tab is in the background.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      cancelAnimationFrame(frame);
+      frame = 0;
+    } else if (!frame) {
+      frame = requestAnimationFrame(loop);
+    }
+  });
+
+  frame = requestAnimationFrame(loop);
+}
+
+/* ── start ──────────────────────────────────────────────────────────────── */
+
+$('tok-btn').addEventListener('click', () => {
+  const button = $('tok-btn');
+  button.setAttribute('aria-expanded', button.getAttribute('aria-expanded') === 'true' ? 'false' : 'true');
+});
 
 $('clear').addEventListener('click', () => {
   state.rows = [];
@@ -988,6 +1622,17 @@ try { startHeartbeat(); } catch (error) { console.error('[proxy] heartbeat', err
 try { renderStatus(); } catch (error) { console.error('[proxy] status', error); }
 try { renderStats(); } catch (error) { console.error('[proxy] stats', error); }
 try { renderRows(); } catch (error) { console.error('[proxy] rows', error); }
+try { startDust(); } catch (error) { console.error('[proxy] dust', error); }
+
+// The travelled distance for the connector arrow depends on the wire's width,
+// which only exists after layout.
+function measureWires() {
+  for (const wire of document.querySelectorAll('.wire')) {
+    wire.style.setProperty('--travel', Math.max(0, wire.clientWidth - 4) + 'px');
+  }
+}
+try { measureWires(); window.addEventListener('resize', measureWires, { passive: true }); }
+catch (error) { console.error('[proxy] wire measure', error); }
 </script>
 </body>
 </html>

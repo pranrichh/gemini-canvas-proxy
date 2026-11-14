@@ -1,0 +1,1430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemini Canvas Proxy</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #07080c;
+    --surface: #11141a;
+    --surface-2: #171b22;
+    --line: #232a33;
+
+    --text: #e9edf2;
+    --muted: #98a3b0;
+    --faint: #6b7683;
+
+    /* from the logo */
+    --pink: #ff2e93;
+    --orange: #ff9a28;
+    --gold: #ffd800;
+    --ok: #9be15d;
+    --cyan: #10f4ff;
+    --blue: #2b46ff;
+
+    /* state: grey / green / red, nothing else */
+    --idle: #66707c;
+    --bad: #ff5f5f;
+
+    --sans: "Space Grotesk", "Cantarell", "Ubuntu", "DejaVu Sans", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", "Ubuntu Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* A field of coloured dust. The canvas is transparent and particles fade
+     against it, so the page background shows through rather than a black
+     rectangle sitting on top of it. */
+  .dust {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  /* Barely-there vignette: enough to settle the middle of the page without
+     hiding the field. */
+  .veil {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      /* A darkened column where the content lives, so the field stays at the
+         margins instead of showing through the text. */
+      linear-gradient(90deg,
+        rgba(7, 8, 12, 0) 0%,
+        rgba(7, 8, 12, 0.62) 9%,
+        rgba(7, 8, 12, 0.86) 24%,
+        rgba(7, 8, 12, 0.88) 76%,
+        rgba(7, 8, 12, 0.62) 91%,
+        rgba(7, 8, 12, 0) 100%),
+      radial-gradient(120% 90% at 50% 0%, rgba(7, 8, 12, 0.55) 0%, rgba(7, 8, 12, 0.18) 45%, transparent 75%);
+  }
+
+  .panel {
+    position: relative;
+    z-index: 1;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 30px 22px 48px;
+  }
+
+  /* ── header ───────────────────────────────────────────────── */
+
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    flex-wrap: wrap;
+  }
+
+  /* The mark carries the name, so no wordmark is repeated beside it. */
+  .mark {
+    width: 62px;
+    height: 62px;
+    display: block;
+    filter: drop-shadow(0 6px 26px rgba(255, 46, 147, 0.28));
+  }
+
+
+
+  /* ── banner ───────────────────────────────────────────────── */
+
+  /* The animated banner from the project README, embedded as-is: same service
+     output, same Bitcount face, same gold on deep blue. An <img> keeps the
+     SVG's own styles and SMIL timeline isolated from the page. */
+  .banner {
+    display: block;
+    height: 50px;
+    width: auto;
+    max-width: 100%;
+    border-radius: 5px;
+  }
+
+  /* ── state ────────────────────────────────────────────────── */
+
+  .status { margin-top: 22px; text-align: center; }
+
+  .status-word {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    font-size: 17px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+
+  .status-word code {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text);
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--idle);
+    flex: none;
+  }
+
+  /* Grey until there is evidence; green only when the whole chain is up. */
+  .status[data-state="ready"] .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(155, 225, 93, 0.20); }
+  .status[data-state="ready"] .status-word { color: var(--ok); }
+  .status[data-state="degraded"] .dot { background: var(--idle); }
+  .status[data-state="down"] .dot { background: var(--bad); box-shadow: 0 0 0 3px rgba(255, 95, 95, 0.18); }
+  .status[data-state="down"] .status-word { color: var(--bad); }
+
+  .status-note {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 20px;
+  }
+
+  /* ── signal path ──────────────────────────────────────────── */
+
+  /* Same language as the stats: a line with segments, not a card. */
+  .path {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+    padding: 14px 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .node { min-width: 0; }
+
+  .node-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .node-value {
+    margin-top: 3px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .node[data-on="1"] .node-value { color: var(--ok); }
+  .node[data-on="0"] .node-value { color: var(--bad); }
+  .node[data-on="1"] .dot { background: var(--ok); }
+  .node[data-on="0"] .dot { background: var(--bad); }
+
+  .wire {
+    position: relative;
+    flex: 1 1 30px;
+    min-width: 22px;
+    height: 2px;
+    background: var(--line);
+    overflow: visible;
+    /* A failure starts from the healthy state and drains to red rather than
+       switching instantly, which reads as "this just broke" instead of "this
+       was always red". */
+    transition: background-color 900ms ease, opacity 900ms ease;
+  }
+
+  .wire[data-on="1"] {
+    background-image: linear-gradient(90deg,
+      rgba(155, 225, 93, 0.25) 0%, var(--ok) 45%, rgba(155, 225, 93, 0.25) 90%);
+    background-size: 220% 100%;
+    background-color: var(--ok);
+    opacity: 0.9;
+    animation: flow 2.4s linear infinite;
+  }
+
+  @keyframes flow {
+    from { background-position: 0% 0; }
+    to   { background-position: 220% 0; }
+  }
+
+  .wire[data-on="0"][data-broken="1"] { background-color: var(--bad); background-image: none; opacity: 0.6; }
+
+  /* An arrow that travels the connector while the link is being established.
+     It is the only motion on the page that is not a response to the reader. */
+  .wire .arrow {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 16px;
+    height: 8px;
+    margin-top: -4px;
+    background: var(--ok);
+    clip-path: polygon(0 50%, 62% 0, 62% 36%, 100% 36%, 100% 64%, 62% 64%, 62% 100%);
+    opacity: 0;
+  }
+
+  .wire[data-pending="1"] .arrow { opacity: 1; animation: slice 1.5s cubic-bezier(.45, .05, .35, .95) infinite; }
+
+  @keyframes slice {
+    0%   { transform: translateX(-18px); opacity: 0; }
+    18%  { opacity: 1; }
+    82%  { opacity: 1; }
+    100% { transform: translateX(var(--travel, 120px)); opacity: 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wire[data-pending="1"] .arrow { animation: none; opacity: 0.6; transform: translateX(40%); }
+  }
+
+  /* ── stats ────────────────────────────────────────────────── */
+
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 16px;
+    padding: 10px 2px;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 2px 15px;
+    border-left: 1px solid var(--line);
+    background: none;
+    border-top: 0; border-right: 0; border-bottom: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+  }
+
+  .stat:first-child { padding-left: 0; border-left: 0; }
+
+  .stat b {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat b.ok { color: var(--ok); }
+  .stat b.bad { color: var(--bad); }
+  .stat b.idle { color: var(--idle); }
+
+  .stat-tokens { cursor: pointer; }
+  .stat-tokens:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 4px; }
+
+  /* Animating max-width clips the last glyph once the content is wider than
+     the ceiling, which is how "35k" became "35". A 0fr -> 1fr grid column
+     expands to the content's own width, so nothing can be cut off. */
+  .stat-tokens .split {
+    display: grid;
+    grid-template-columns: 0fr;
+    opacity: 0;
+    transition: grid-template-columns 320ms cubic-bezier(.4, 0, .2, 1), opacity 200ms ease, margin 320ms ease;
+  }
+
+  .stat-tokens .split-inner {
+    overflow: hidden;
+    white-space: nowrap;
+    display: block;
+  }
+
+  .stat-tokens[aria-expanded="true"] .split {
+    grid-template-columns: 1fr;
+    opacity: 1;
+    margin-left: 8px;
+  }
+
+  .stat-tokens .split b { color: var(--cyan); }
+
+  /* ── activity ─────────────────────────────────────────────── */
+
+  .log-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 20px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .log-head button {
+    font: inherit;
+    font-size: 12px;
+    color: var(--faint);
+    background: none;
+    border: 0;
+    padding: 2px 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .log-head button:hover { color: var(--text); }
+  .log-head button:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+
+  .rows { margin-top: 4px; }
+
+  .row { border-bottom: 1px solid var(--line); }
+
+  .row-toggle {
+    display: grid;
+    grid-template-columns: 62px minmax(0, 1fr) 44px 56px 56px 18px;
+    gap: 12px;
+    align-items: baseline;
+    width: 100%;
+    padding: 9px 2px;
+    background: none;
+    border: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .row-toggle:hover { background: var(--surface); }
+  .row-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+
+  .c-time { font-family: var(--mono); font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .c-model { font-family: var(--mono); font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .c-code { font-family: var(--mono); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+  .c-code.ok { color: var(--ok); }
+  .c-code.bad { color: var(--bad); }
+  .c-ms { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .c-tok { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .c-open { font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: right; }
+
+  .row.is-error .c-model { color: var(--bad); }
+
+  .detail { display: none; padding: 2px 2px 16px 74px; }
+  .row[data-open="1"] .detail { display: block; }
+
+  .dl {
+    display: grid;
+    grid-template-columns: 66px minmax(0, 1fr);
+    gap: 3px 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .dl dt { color: var(--faint); }
+  .dl dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+
+  .output {
+    grid-column: 1 / -1;
+    margin: 8px 0 0;
+    padding: 12px 13px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--cyan);
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 240px;
+    overflow: auto;
+  }
+
+  .output.is-image { padding: 8px; line-height: 0; text-align: center; }
+  .output img { max-width: 100%; max-height: 320px; border-radius: 3px; }
+
+  .detail audio { grid-column: 1 / -1; margin-top: 10px; width: 100%; height: 34px; }
+
+  .audio-meta {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  .more { grid-column: 1 / -1; margin-top: 10px; }
+
+  .more summary {
+    font-size: 12px;
+    color: var(--faint);
+    cursor: pointer;
+    list-style: none;
+    width: fit-content;
+    padding: 2px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+
+  .more summary::-webkit-details-marker { display: none; }
+  .more summary:hover { color: var(--text); }
+  .more summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+
+  .more pre {
+    margin: 8px 0 0;
+    padding: 10px 12px;
+    max-height: 220px;
+    overflow: auto;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .detail pre::-webkit-scrollbar, .output::-webkit-scrollbar { width: 8px; }
+  .detail pre::-webkit-scrollbar-thumb, .output::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+
+  .empty { padding: 28px 2px; font-size: 13px; color: var(--muted); }
+  .empty code { font-family: var(--mono); font-size: 12px; color: var(--cyan); }
+
+  .boot-error {
+    margin-top: 14px;
+    padding: 9px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--bad);
+    border: 1px solid var(--bad);
+    border-radius: 4px;
+    white-space: pre-wrap;
+  }
+
+  @media (max-width: 640px) {
+    .path { flex-wrap: wrap; gap: 8px; }
+    .wire { display: none; }
+    .node { width: 100%; }
+    .row-toggle { grid-template-columns: 54px minmax(0, 1fr) 44px 18px; }
+    .c-ms, .c-tok { display: none; }
+    .detail { padding-left: 2px; }
+  }
+</style>
+</head>
+<body>
+<canvas class="dust" id="dust" aria-hidden="true"></canvas>
+<div class="veil" aria-hidden="true"></div>
+
+<main class="panel">
+  <header class="head">
+    <span class="mark" aria-hidden="true"><!--LOGO--></span>
+    <img class="banner" id="banner" src="<!--BANNER-->" alt="Gemini Canvas Proxy — free unlimited Gemini API for any OpenAI-compatible app" aria-hidden="true">
+  </header>
+
+  <div class="status" id="status" data-state="degraded" role="status" aria-live="polite">
+    <div class="status-word"><span class="dot"></span><span id="status-word">Connecting</span></div>
+    <div class="status-note" id="status-note">Waiting for the relay.</div>
+  </div>
+
+  <section class="path" aria-label="Connection path">
+    <div class="node" id="n-canvas" data-on="1">
+      <div class="node-top"><span class="dot"></span>Canvas page</div>
+      <div class="node-value" id="v-canvas">running</div>
+    </div>
+    <div class="wire" id="w-relay" data-on="0" data-pending="1"><span class="arrow"></span></div>
+    <div class="node" id="n-relay" data-on="0">
+      <div class="node-top"><span class="dot"></span>Extension</div>
+      <div class="node-value" id="v-relay">waiting</div>
+    </div>
+    <div class="wire" id="w-host" data-on="0"><span class="arrow"></span></div>
+    <div class="node" id="n-host" data-on="0">
+      <div class="node-top"><span class="dot"></span>Native host</div>
+      <div class="node-value" id="v-host">unknown</div>
+    </div>
+  </section>
+
+  <section class="stats" aria-label="Session totals">
+    <div class="stat"><b id="s-requests">0</b> requests</div>
+    <div class="stat"><b id="s-answered" class="ok">0</b> answered</div>
+    <div class="stat"><b id="s-failed" class="idle">0</b> failed</div>
+    <div class="stat"><b id="s-median">—</b> median</div>
+    <button type="button" class="stat stat-tokens" id="tok-btn" aria-expanded="false"
+            title="Split into input and output">
+      <b id="s-total">0</b> tokens
+      <span class="split"><span class="split-inner"><b id="s-in">0</b> in · <b id="s-out">0</b> out</span></span>
+    </button>
+  </section>
+
+  <div class="log-head">
+    <span id="log-count"></span>
+    <button type="button" id="clear">Clear</button>
+  </div>
+
+  <section class="rows" id="rows"></section>
+</main>
+
+<script>
+const apiKey = "";
+
+// Canvas transforms this page before serving it, and a bad transform throws
+// while the rest of the file is still loading. Without this the page looks
+// intact and simply never connects, which reads as a broken relay.
+window.addEventListener('error', function (event) {
+  const panel = document.querySelector('.panel');
+  if (!panel || document.getElementById('boot-error')) return;
+  const box = document.createElement('div');
+  box.id = 'boot-error';
+  box.className = 'boot-error';
+  box.textContent = 'Script error: ' + (event.message || 'unknown')
+    + (event.lineno ? ' (line ' + event.lineno + ')' : '');
+  panel.appendChild(box);
+});
+
+const API_ORIGIN = 'https://generativelanguage.googleapis.com';
+const API_PATH = /^\/v1beta\/models\/([A-Za-z0-9._-]+):(generateContent|streamGenerateContent)$/;
+const PING_MS = 5000;
+const MISSED_BEFORE_OFFLINE = 3;
+const RETRY_MS = 1500;
+const MAX_ROWS = 100;
+
+const FINISH_REASONS = {
+  STOP: 'stop', MAX_TOKENS: 'length',
+  SAFETY: 'content_filter', RECITATION: 'content_filter', BLOCKLIST: 'content_filter',
+  PROHIBITED_CONTENT: 'content_filter', SPII: 'content_filter',
+  IMAGE_SAFETY: 'content_filter', LANGUAGE: 'content_filter'
+};
+
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  port: null,
+  handshaked: false,
+  nativeConnected: false,
+  hostPort: 0,
+  hostError: '',
+  protocol: 0,
+  pingSeq: 0,
+  missed: 0,
+  rows: [],
+  stats: { requests: 0, answered: 0, failed: 0, inbound: 0, outbound: 0, total: 0 },
+  durations: []
+};
+
+/* ── formatting ─────────────────────────────────────────────────────────── */
+
+function clock(date) {
+  const pad = (n) => (n < 10 ? '0' : '') + n;
+  return pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+}
+
+function duration(ms) {
+  if (!isFinite(ms)) return '—';
+  return ms < 1000 ? Math.round(ms) + 'ms' : (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + 's';
+}
+
+function compact(n) {
+  if (!n) return '0';
+  if (n < 1000) return String(n);
+  return (n / 1000).toFixed(n < 10000 ? 1 : 0) + 'k';
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function endpointUrl() {
+  return 'http://127.0.0.1:' + (state.hostPort || 8765) + '/v1';
+}
+
+function pretty(value, limit) {
+  try {
+    return JSON.stringify(value, null, 1).slice(0, limit || 1600);
+  } catch (error) {
+    return String(value).slice(0, 400);
+  }
+}
+
+/* ── render: status ─────────────────────────────────────────────────────── */
+
+function setNode(node, valueNode, on, text) {
+  node.dataset.on = on ? '1' : '0';
+  valueNode.textContent = text;
+}
+
+function renderStatus() {
+  let word = 'Ready';
+  let note = 'Requests are being served.';
+  let key = 'ready';
+
+  if (!state.handshaked) {
+    key = 'degraded';
+    word = 'Connecting';
+    note = 'Waiting for the extension to answer.';
+  } else if (!state.nativeConnected) {
+    key = 'down';
+    word = 'Host offline';
+    note = state.hostError || 'Run ./setup.sh, then reload the extension.';
+  }
+
+  $('status').dataset.state = key;
+
+  if (key === 'ready') {
+    $('status-word').innerHTML = 'Ready at <code>' + endpointUrl() + '</code>';
+  } else {
+    $('status-word').textContent = word;
+  }
+  $('status-note').textContent = note;
+
+  setNode($('n-canvas'), $('v-canvas'), true, 'running');
+  setNode($('n-relay'), $('v-relay'), state.handshaked, state.handshaked ? 'relaying' : 'waiting');
+  setNode($('n-host'), $('v-host'), state.nativeConnected, state.nativeConnected ? 'connected' : 'offline');
+
+  // The arrow only travels while a link is still being established.
+  const relayWire = $('w-relay');
+  relayWire.dataset.on = state.handshaked ? '1' : '0';
+  relayWire.dataset.pending = state.handshaked ? '0' : '1';
+  relayWire.dataset.broken = '0';
+
+  const hostWire = $('w-host');
+  hostWire.dataset.on = state.nativeConnected ? '1' : '0';
+  hostWire.dataset.pending = state.handshaked && !state.nativeConnected ? '0' : '0';
+  hostWire.dataset.broken = state.handshaked && !state.nativeConnected ? '1' : '0';
+}
+
+/* ── render: stats ──────────────────────────────────────────────────────── */
+
+function renderStats() {
+  $('s-requests').textContent = String(state.stats.requests);
+
+  const answered = $('s-answered');
+  answered.textContent = String(state.stats.answered);
+  answered.className = state.stats.answered ? 'ok' : 'idle';
+
+  const failed = $('s-failed');
+  failed.textContent = String(state.stats.failed);
+  failed.className = state.stats.failed ? 'bad' : 'idle';
+
+  const med = median(state.durations);
+  $('s-median').textContent = med === null ? '—' : duration(med);
+
+  $('s-total').textContent = compact(state.stats.total);
+  $('s-in').textContent = compact(state.stats.inbound);
+  $('s-out').textContent = compact(state.stats.outbound);
+
+  $('log-count').textContent = state.rows.length
+    ? state.rows.length + (state.rows.length === 1 ? ' request' : ' requests')
+    : '';
+  $('clear').hidden = !state.rows.length;
+}
+
+/* ── render: rows ───────────────────────────────────────────────────────── */
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function buildRow(entry) {
+  const row = el('div', 'row' + (entry.ok ? '' : ' is-error'));
+  row.dataset.open = '0';
+
+  const toggle = el('button', 'row-toggle');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', 'false');
+
+  toggle.appendChild(el('span', 'c-time', entry.time));
+  toggle.appendChild(el('span', 'c-model', entry.model));
+  toggle.appendChild(el('span', 'c-code ' + (entry.ok ? 'ok' : 'bad'),
+    entry.code ? String(entry.code) : '—'));
+  toggle.appendChild(el('span', 'c-ms', entry.ms === null ? '' : duration(entry.ms)));
+  toggle.appendChild(el('span', 'c-tok', entry.usage ? compact(entry.usage.total_tokens) : ''));
+  toggle.appendChild(el('span', 'c-open', '▾'));
+
+  const detail = el('div', 'detail');
+  const dl = el('div', 'dl');
+
+  const line = (term, value) => {
+    dl.appendChild(el('dt', null, term));
+    dl.appendChild(el('dd', null, value));
+  };
+
+  line('request', entry.method + ' ' + entry.path);
+  if (entry.usage) {
+    line('usage', entry.usage.prompt_tokens + ' in · '
+      + entry.usage.completion_tokens + ' out · '
+      + entry.usage.total_tokens + ' total');
+  }
+  if (entry.finish) line('finish', entry.finish);
+  if (entry.error) line('error', entry.error);
+
+  // What came back, rendered as itself rather than described.
+  if (entry.image) {
+    const box = el('div', 'output is-image');
+    const img = document.createElement('img');
+    img.src = entry.image;
+    img.alt = 'generated image';
+    box.appendChild(img);
+    dl.appendChild(box);
+  } else if (entry.text) {
+    dl.appendChild(el('div', 'output', entry.text));
+  }
+
+  if (entry.audio) {
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.preload = 'metadata';
+    try {
+      const wav = pcmToWav(entry.audio.bytes, entry.audio.rate);
+      audio.src = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+    } catch (error) {
+      console.error('[proxy] audio', error);
+    }
+    dl.appendChild(audio);
+    dl.appendChild(el('div', 'audio-meta',
+      'speech · ' + (entry.audio.seconds ? entry.audio.seconds.toFixed(1) + ' s · ' : '')
+      + entry.audio.mime_type));
+  }
+
+  if (entry.requestBody) {
+    const more = document.createElement('details');
+    more.className = 'more';
+    const summary = document.createElement('summary');
+    summary.textContent = 'request sent to Gemini';
+    more.appendChild(summary);
+    more.appendChild(el('pre', null, entry.requestBody));
+    dl.appendChild(more);
+  }
+
+  if (entry.responseBody) {
+    const more = document.createElement('details');
+    more.className = 'more';
+    const summary = document.createElement('summary');
+    summary.textContent = 'raw response';
+    more.appendChild(summary);
+    more.appendChild(el('pre', null, entry.responseBody));
+    dl.appendChild(more);
+  }
+
+  detail.appendChild(dl);
+
+  toggle.addEventListener('click', () => {
+    const wasOpen = row.dataset.open === '1';
+    for (const other of document.querySelectorAll('.row[data-open="1"]')) {
+      other.dataset.open = '0';
+      other.querySelector('.row-toggle').setAttribute('aria-expanded', 'false');
+      other.querySelector('.c-open').textContent = '▾';
+    }
+    row.dataset.open = wasOpen ? '0' : '1';
+    toggle.setAttribute('aria-expanded', String(!wasOpen));
+    row.querySelector('.c-open').textContent = wasOpen ? '▾' : '▴';
+  });
+
+  row.appendChild(toggle);
+  row.appendChild(detail);
+  return row;
+}
+
+function renderRows() {
+  const host = $('rows');
+  host.textContent = '';
+
+  if (!state.rows.length) {
+    const empty = el('div', 'empty');
+    empty.appendChild(el('div', null, 'No requests yet'));
+    const hint = el('div', null, 'Point a client at ');
+    hint.appendChild(el('code', null, endpointUrl()));
+    empty.appendChild(hint);
+    host.appendChild(empty);
+    return;
+  }
+
+  for (const entry of state.rows) host.appendChild(buildRow(entry));
+}
+
+/* ── request handling ───────────────────────────────────────────────────── */
+
+function post(message) {
+  if (!state.port) return;
+  try { state.port.postMessage(message); } catch (error) { /* port closed */ }
+}
+
+function reply(id, payload) {
+  post({ source: 'gemini-proxy-response', id: id, status: payload.status,
+         data: payload.data, error: payload.error });
+}
+
+function streamEvent(id, payload) {
+  payload.source = 'gemini-proxy-stream';
+  payload.id = id;
+  post(payload);
+}
+
+function buildUrl(path, stream) {
+  const url = new URL(path, API_ORIGIN);
+  if (url.protocol !== 'https:' || url.hostname !== 'generativelanguage.googleapis.com') {
+    throw new Error('refusing to call a non-Gemini destination');
+  }
+  // The key is optional. Canvas authenticates the request at its own boundary;
+  // a key only appears here when Canvas substituted one into the declaration.
+  if (apiKey) url.searchParams.set('key', apiKey);
+  if (stream) url.searchParams.set('alt', 'sse');
+  return url.toString();
+}
+
+function modelFromPath(path) {
+  const match = API_PATH.exec(path);
+  return match ? match[1] : 'unknown';
+}
+
+// Gemini returns raw PCM with no container. The host wraps it in a RIFF header
+// for API clients; the page receives the untouched payload, so it has to do the
+// same or the player reports 0:00 and refuses to play.
+function pcmToWav(bytes, sampleRate) {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  const text = (offset, value) => {
+    for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+
+  text(0, 'RIFF');
+  view.setUint32(4, 36 + bytes.length, true);
+  text(8, 'WAVE');
+  text(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, 'data');
+  view.setUint32(40, bytes.length, true);
+
+  const wav = new Uint8Array(44 + bytes.length);
+  wav.set(new Uint8Array(header), 0);
+  wav.set(bytes, 44);
+  return wav;
+}
+
+function base64ToBytes(data) {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function sampleRateFrom(mime) {
+  const match = /rate=(\d+)/.exec(mime || '');
+  return match ? Number(match[1]) : 24000;
+}
+
+function usageOf(payload) {
+  const meta = (payload && payload.usageMetadata) || {};
+  const prompt = meta.promptTokenCount || 0;
+  const completion = meta.candidatesTokenCount || 0;
+  const total = meta.totalTokenCount || (prompt + completion);
+  return total ? { prompt_tokens: prompt, completion_tokens: completion, total_tokens: total } : null;
+}
+
+function record(entry) {
+  state.rows.push(entry);
+  if (state.rows.length > MAX_ROWS) state.rows.shift();
+
+  if (entry.ok) {
+    state.stats.answered += 1;
+    if (entry.ms !== null) state.durations.push(entry.ms);
+  } else {
+    state.stats.failed += 1;
+  }
+
+  if (entry.usage) {
+    state.stats.inbound += entry.usage.prompt_tokens;
+    state.stats.outbound += entry.usage.completion_tokens;
+    state.stats.total += entry.usage.total_tokens;
+  }
+
+  renderRows();
+  renderStats();
+}
+
+function handleRequest(message) {
+  const id = message.id;
+  const path = message.path;
+  const stream = Boolean(message.stream);
+  const started = performance.now();
+  const time = clock(new Date());
+
+  // /diag asks this page what it can see. The page is the only part of the
+  // chain the host cannot inspect, and "the relay is down" and "the page is not
+  // running" look identical from outside.
+  if (path === '/diag') {
+    reply(id, {
+      status: 200,
+      data: {
+        api_key_length: apiKey ? apiKey.length : 0,
+        handshaked: state.handshaked,
+        protocol: state.protocol,
+        host_port_known: state.hostPort,
+        ready_state: document.readyState
+      },
+      error: null
+    });
+    return;
+  }
+
+  state.stats.requests += 1;
+
+  if (typeof path !== 'string' || !API_PATH.test(path) || path.indexOf('..') !== -1) {
+    record({ time: time, model: 'unknown', ok: false, code: 0, ms: null,
+             method: message.method || 'POST', path: String(path),
+             error: 'rejected an unexpected API path', usage: null });
+    reply(id, { status: 400, error: 'rejected an unexpected API path' });
+    return;
+  }
+
+  const base = {
+    time: time, model: modelFromPath(path), method: message.method || 'POST', path: path,
+    requestBody: message.body ? pretty(message.body) : undefined
+  };
+
+  if (stream) runStream(id, path, message.body, base, started);
+  else runBuffered(id, path, message.body, base, started);
+}
+
+async function runBuffered(id, path, body, base, started) {
+  try {
+    const response = await fetch(buildUrl(path, false), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+
+    const text = await response.text();
+    let payload = {};
+    try { payload = text ? JSON.parse(text) : {}; } catch (error) { payload = {}; }
+
+    const ms = performance.now() - started;
+
+    if (!response.ok) {
+      const detail = (payload.error && payload.error.message) || response.statusText || 'request failed';
+      record(Object.assign({}, base, {
+        ok: false, code: response.status, ms: ms, error: detail, usage: null,
+        responseBody: pretty(payload, 900)
+      }));
+      reply(id, { status: response.status, data: payload, error: detail });
+      return;
+    }
+
+    const candidate = (payload.candidates && payload.candidates[0]) || {};
+    const parts = (candidate.content && candidate.content.parts) || [];
+
+    let output = '';
+    let image = null;
+    let speech = null;
+
+    for (const part of parts) {
+      if (typeof part.text === 'string' && part.text && !part.thought) output += part.text;
+      if (part.inlineData) {
+        const mime = String(part.inlineData.mimeType || '');
+        if (mime.indexOf('audio/') === 0) {
+          const bytes = base64ToBytes(part.inlineData.data);
+          const rate = sampleRateFrom(mime);
+          speech = {
+            mime_type: 'audio/wav',
+            bytes: bytes,
+            rate: rate,
+            seconds: Math.max(0, bytes.length / (rate * 2))
+          };
+        } else if (mime.indexOf('image/') === 0) {
+          image = 'data:' + mime + ';base64,' + part.inlineData.data;
+        }
+      }
+    }
+
+    record(Object.assign({}, base, {
+      ok: true,
+      code: response.status,
+      ms: ms,
+      usage: usageOf(payload),
+      finish: FINISH_REASONS[String(candidate.finishReason || 'STOP').toUpperCase()] || 'stop',
+      text: output || undefined,
+      image: image || undefined,
+      audio: speech || undefined,
+      responseBody: pretty(payload, 1200)
+    }));
+    reply(id, { status: response.status, data: payload, error: null });
+  } catch (error) {
+    const message = error.message || String(error);
+    record(Object.assign({}, base, { ok: false, code: 0, ms: performance.now() - started, error: message }));
+    reply(id, { status: 0, error: message });
+  }
+}
+
+async function runStream(id, path, body, base, started) {
+  let finish = 'stop';
+  let usage = null;
+  let toolIndex = 0;
+  let output = '';
+
+  try {
+    const response = await fetch(buildUrl(path, true), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+
+    if (!response.ok || !response.body) {
+      const raw = await response.text().catch(() => '');
+      let detail = response.statusText || 'stream failed';
+      try { detail = JSON.parse(raw).error.message || detail; } catch (error) { /* keep status text */ }
+      record(Object.assign({}, base, { ok: false, code: response.status,
+        ms: performance.now() - started, error: detail, responseBody: raw.slice(0, 900) }));
+      streamEvent(id, { event: 'error', error: detail });
+      return;
+    }
+
+    streamEvent(id, { event: 'start' });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const consume = (block) => {
+      for (const line of block.split('\n')) {
+        if (line.indexOf('data:') !== 0) continue;
+        const raw = line.slice(5).trim();
+        if (!raw || raw === '[DONE]') continue;
+
+        let event;
+        try { event = JSON.parse(raw); } catch (error) { continue; }
+        if (event.error) throw new Error(event.error.message || 'stream error');
+        if (event.promptFeedback && event.promptFeedback.blockReason) {
+          throw new Error('Gemini blocked the prompt (' + event.promptFeedback.blockReason + ')');
+        }
+
+        const candidate = (event.candidates && event.candidates[0]) || {};
+        for (const part of ((candidate.content && candidate.content.parts) || [])) {
+          if (typeof part.text === 'string' && part.text && !part.thought) {
+            output += part.text;
+            streamEvent(id, { event: 'delta', text: part.text });
+          } else if (part.functionCall) {
+            streamEvent(id, {
+              event: 'tool_call',
+              tool_call: {
+                index: toolIndex++,
+                id: 'call_' + Math.random().toString(16).slice(2, 10),
+                name: part.functionCall.name || '',
+                arguments: JSON.stringify(part.functionCall.args || {})
+              }
+            });
+            finish = 'tool_calls';
+          }
+        }
+
+        if (candidate.finishReason) {
+          finish = FINISH_REASONS[String(candidate.finishReason).toUpperCase()] || 'stop';
+        }
+        const u = usageOf(event);
+        if (u) usage = u;
+      }
+    };
+
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let split;
+      while ((split = buffer.indexOf('\n\n')) >= 0) {
+        consume(buffer.slice(0, split));
+        buffer = buffer.slice(split + 2);
+      }
+    }
+    if (buffer.trim()) consume(buffer);
+  } catch (error) {
+    const message = error.message || String(error);
+    record(Object.assign({}, base, { ok: false, code: 0, ms: performance.now() - started, error: message }));
+    streamEvent(id, { event: 'error', error: message });
+    return;
+  }
+
+  record(Object.assign({}, base, {
+    ok: true, code: 200, ms: performance.now() - started, usage: usage, finish: finish,
+    text: output || undefined
+  }));
+  streamEvent(id, { event: 'end', finish_reason: finish, usage: usage });
+}
+
+/* ── transport ──────────────────────────────────────────────────────────── */
+
+// Canvas can render the preview more than once — a visible instance and an
+// offscreen one. Both would hand a port to the same relay, and the relay keeps
+// only the newest, so the two take turns stealing it. Only the instance that is
+// actually laid out may claim the port.
+function isDisplayed() {
+  return window.innerWidth > 50 && window.innerHeight > 50;
+}
+
+function handshake() {
+  if (!isDisplayed()) {
+    setTimeout(handshake, RETRY_MS);
+    return;
+  }
+
+  const channel = new MessageChannel();
+
+  channel.port1.onmessage = (event) => {
+    const data = event.data || {};
+
+    if (data.source === 'gemini-proxy-ack') {
+      state.handshaked = true;
+      state.nativeConnected = Boolean(data.nativeConnected);
+      state.hostPort = data.port || state.hostPort;
+      state.protocol = data.protocol || 0;
+      state.hostError = data.error || '';
+      state.missed = 0;
+      renderStatus();
+      return;
+    }
+
+    if (data.source === 'gemini-proxy-pong') {
+      state.missed = 0;
+      state.nativeConnected = Boolean(data.nativeConnected);
+      state.hostPort = data.port || state.hostPort;
+      state.hostError = data.error || '';
+      if (!state.handshaked) state.handshaked = true;
+      renderStatus();
+      return;
+    }
+
+    if (data.source === 'gemini-proxy-state') {
+      state.nativeConnected = Boolean(data.connected);
+      renderStatus();
+      return;
+    }
+
+    if (data.source === 'gemini-proxy-request') handleRequest(data);
+  };
+
+  channel.port1.start();
+  state.port = channel.port1;
+
+  // Address the top document. Canvas can nest the preview inside an
+  // intermediate sandbox frame, and that frame has no relay to receive a port.
+  const host = window.top || window.parent;
+  host.postMessage({ source: 'gemini-proxy-ready' }, '*', [channel.port2]);
+
+  setTimeout(() => {
+    if (!state.handshaked) handshake();
+  }, RETRY_MS);
+}
+
+function startHeartbeat() {
+  setInterval(() => {
+    if (!state.port) return;
+    state.pingSeq += 1;
+    post({ source: 'gemini-proxy-ping', seq: state.pingSeq });
+
+    if (!state.handshaked) return;
+    state.missed += 1;
+
+    if (state.missed >= MISSED_BEFORE_OFFLINE) {
+      // Silence means the relay is gone: an extension reload or a recycled
+      // service worker tears down the world holding the port.
+      state.handshaked = false;
+      state.nativeConnected = false;
+      state.port = null;
+      state.missed = 0;
+      renderStatus();
+      handshake();
+    }
+  }, PING_MS);
+}
+
+/* ── ambience ───────────────────────────────────────────────────────────── */
+
+// Coloured dust: a few hundred motes in the logo's palette, drifting on a slow
+// flow field and shoved aside by the pointer. Hand-rolled because the particle
+// libraries worth using are a few hundred kilobytes over a CDN, and a Canvas
+// preview cannot be relied on to fetch them.
+function startDust() {
+  const canvas = $('dust');
+  if (!canvas) return;
+
+  const context = canvas.getContext('2d');
+  if (!context) return;
+
+  const palette = [
+    [255, 46, 147], [255, 154, 40], [255, 216, 0],
+    [88, 255, 56], [16, 244, 255], [43, 70, 255],
+    [255, 255, 255]
+  ];
+
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const FPS = 40;
+  const FRAME_MS = 1000 / FPS;
+
+  let width = 0;
+  let height = 0;
+  let motes = [];
+  let pointer = { x: -9999, y: -9999 };
+  let frame = 0;
+  let previous = 0;
+
+  // Where the field is allowed to be dense. The dust is the page's texture, not
+  // its noise: it clusters around the mark and the banner and along the edges,
+  // and thins out under the text where it would only fight the words.
+  function densityAt(x, y) {
+    const edge = 110;
+    if (x < edge || x > width - edge || y < edge * 0.5 || y > height - edge * 0.5) return 1;
+    const inHero = y < 210 && Math.abs(x - width / 2) < 430;
+    if (inHero) return 1.15;
+    const inColumn = Math.abs(x - width / 2) < 440;
+    return inColumn ? 0.16 : 0.55;
+  }
+
+  function pickPoint() {
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      const x = Math.random() * width;
+      const y = Math.random() * height;
+      if (Math.random() < densityAt(x, y)) return { x: x, y: y };
+    }
+    return { x: Math.random() * width, y: Math.random() * height };
+  }
+
+  function seed() {
+    const count = Math.max(320, Math.min(1300, Math.round((width * height) / 1100)));
+    motes = new Array(count);
+
+    for (let i = 0; i < count; i += 1) {
+      const point = pickPoint();
+      const colour = palette[Math.floor(Math.random() * palette.length)];
+      const big = Math.random() > 0.93;
+
+      motes[i] = {
+        x: point.x,
+        y: point.y,
+        vx: (Math.random() - 0.5) * 0.25,
+        vy: (Math.random() - 0.5) * 0.25,
+        size: big ? 1.8 + Math.random() * 1.4 : 0.6 + Math.random() * 0.9,
+        colour: colour,
+        alpha: big ? 0.42 : 0.14 + Math.random() * 0.3,
+        twinkle: Math.random() * Math.PI * 2
+      };
+    }
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    seed();
+  }
+
+  function paint(time) {
+    // Fade rather than clear: the previous frame dims instead of vanishing,
+    // which gives each mote a short tail without keeping a buffer.
+    context.globalCompositeOperation = 'destination-out';
+    context.fillStyle = 'rgba(0, 0, 0, 0.14)';
+    context.fillRect(0, 0, width, height);
+
+    context.globalCompositeOperation = 'lighter';
+
+    for (const mote of motes) {
+      const angle = Math.sin(mote.x * 0.0032 + time * 0.00013)
+                  + Math.cos(mote.y * 0.0028 - time * 0.00009);
+
+      mote.vx += Math.cos(angle) * 0.020;
+      mote.vy += Math.sin(angle) * 0.020;
+
+      const dx = mote.x - pointer.x;
+      const dy = mote.y - pointer.y;
+      const distanceSquared = dx * dx + dy * dy;
+
+      if (distanceSquared < 26000 && distanceSquared > 1) {
+        const push = (1 - Math.sqrt(distanceSquared) / 161) * 0.9;
+        mote.vx += (dx / Math.sqrt(distanceSquared)) * push;
+        mote.vy += (dy / Math.sqrt(distanceSquared)) * push;
+      }
+
+      mote.vx *= 0.96;
+      mote.vy *= 0.96;
+      mote.x += mote.vx;
+      mote.y += mote.vy;
+
+      if (mote.x < -10) mote.x = width + 10;
+      if (mote.x > width + 10) mote.x = -10;
+      if (mote.y < -10) mote.y = height + 10;
+      if (mote.y > height + 10) mote.y = -10;
+
+      const flicker = reduced ? 1 : 0.82 + 0.18 * Math.sin(time * 0.0016 + mote.twinkle);
+      const [r, g, b] = mote.colour;
+      context.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (mote.alpha * flicker).toFixed(3) + ')';
+
+      if (mote.size > 1.6) {
+        context.beginPath();
+        context.arc(mote.x, mote.y, mote.size, 0, Math.PI * 2);
+        context.fill();
+      } else {
+        context.fillRect(mote.x, mote.y, mote.size, mote.size);
+      }
+    }
+  }
+
+  function loop(time) {
+    frame = requestAnimationFrame(loop);
+    if (time - previous < FRAME_MS - 1) return;
+    previous = time;
+    paint(time);
+  }
+
+  resize();
+  window.addEventListener('resize', resize, { passive: true });
+
+  if (reduced) {
+    // One static arrangement: the field is decorative, and motion is optional.
+    context.globalCompositeOperation = 'lighter';
+    paint(0);
+    return;
+  }
+
+  window.addEventListener('pointermove', (event) => {
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+  }, { passive: true });
+
+  window.addEventListener('pointerleave', () => { pointer.x = -9999; pointer.y = -9999; }, { passive: true });
+
+  // Nothing to animate while the tab is in the background.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      cancelAnimationFrame(frame);
+      frame = 0;
+    } else if (!frame) {
+      frame = requestAnimationFrame(loop);
+    }
+  });
+
+  frame = requestAnimationFrame(loop);
+}
+
+/* ── start ──────────────────────────────────────────────────────────────── */
+
+$('tok-btn').addEventListener('click', () => {
+  const button = $('tok-btn');
+  button.setAttribute('aria-expanded', button.getAttribute('aria-expanded') === 'true' ? 'false' : 'true');
+});
+
+$('clear').addEventListener('click', () => {
+  state.rows = [];
+  state.durations = [];
+  state.stats = { requests: 0, answered: 0, failed: 0, inbound: 0, outbound: 0, total: 0 };
+  renderRows();
+  renderStats();
+});
+
+// Transport first. A rendering fault must not stop the relay from binding.
+try { handshake(); } catch (error) { console.error('[proxy] handshake', error); }
+try { startHeartbeat(); } catch (error) { console.error('[proxy] heartbeat', error); }
+try { renderStatus(); } catch (error) { console.error('[proxy] status', error); }
+try { renderStats(); } catch (error) { console.error('[proxy] stats', error); }
+try { renderRows(); } catch (error) { console.error('[proxy] rows', error); }
+try { startDust(); } catch (error) { console.error('[proxy] dust', error); }
+
+// The travelled distance for the connector arrow depends on the wire's width,
+// which only exists after layout.
+function measureWires() {
+  for (const wire of document.querySelectorAll('.wire')) {
+    wire.style.setProperty('--travel', Math.max(0, wire.clientWidth - 4) + 'px');
+  }
+}
+try { measureWires(); window.addEventListener('resize', measureWires, { passive: true }); }
+catch (error) { console.error('[proxy] wire measure', error); }
+</script>
+</body>
+</html>

@@ -37,9 +37,9 @@ colour.
 | `--text` | `#e8ecef` | primary |
 | `--muted` | `#98a2a9` | secondary, 6.9:1 on bg |
 | `--faint` | `#6d777e` | tertiary, 4.6:1 on bg |
-| `--accent` | `#e0a458` | warm sand — links, live state |
-| `--warn` | `#d9a441` | degraded |
-| `--danger` | `#e0685c` | failed |
+| `--ok` | `#9be15d` | lime — connected, answered |
+| `--bad` | `#ff5f5f` | failed |
+| `--idle` | `#66707c` | grey — no evidence either way |
 
 ## Type
 
@@ -77,13 +77,29 @@ hairline, not by a card per idea.
 └──────────────────────────────────────────────────────┘
 ```
 
+## Header
+
+The mark and the README banner sit on one line, centred, at matched heights. The
+banner carries the project name and the catchphrase in its own typewriter loop,
+so no wordmark repeats it. The status line underneath says what the panel is for
+in one sentence: *Ready at* followed by the endpoint.
+
+## Background
+
+Coloured dust in the logo's palette, drifting on a slow flow field and pushed
+aside by the pointer. It clusters around the header and along the page edges and
+thins out under the text, because it is the page's texture and not its noise.
+Hand-rolled Canvas 2D: the libraries worth using are a few hundred kilobytes
+over a CDN, which a sandboxed Canvas preview cannot be relied on to fetch.
+
 ## Signature move
 
-The **signal path**: three diamonds joined by a hairline that thickens and turns
-accent when both ends are up. It is the one deliberate graphic element, it
-encodes the actual topology (three links in series), and it replaces the row of
-status pills the old page had. Diamonds rather than dots because a filled
-circle is the generic health indicator and this needs to look like a schematic.
+The **signal path**: three nodes joined by a hairline. When a link is up its
+segment carries a slow travelling highlight; when it fails the segment starts
+lime and drains to red over most of a second, so a break reads as something that
+just happened rather than something that was always wrong. It is the one
+deliberate graphic element and it encodes the actual topology: three links in
+series.
 
 ## Interaction
 
