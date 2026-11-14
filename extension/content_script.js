@@ -66,6 +66,52 @@ function refreshBridgeState() {
     .catch(() => { /* service worker asleep; the next ping retries */ });
 }
 
+/**
+ * Hand one answer to the service worker.
+ *
+ * An image or a speech clip is megabytes of base64, and a message that size
+ * does not survive the hop: the send fails and the worker never learns the page
+ * answered, so the host waits out its whole timeout on a request that finished
+ * in eleven seconds. Split anything large into numbered pieces and let the
+ * service worker put it back together. Small answers take the direct path.
+ */
+const RESPONSE_CHUNK_CHARS = 256 * 1024;
+
+function deliverResponse(message) {
+  let body;
+  try {
+    body = { status: message.status, data: message.data === undefined ? null : message.data,
+             error: message.error === undefined ? null : message.error };
+  } catch (error) {
+    body = { status: 0, data: null, error: 'response could not be read: ' + error.message };
+  }
+
+  let json;
+  try {
+    json = JSON.stringify(body);
+  } catch (error) {
+    json = JSON.stringify({ status: 0, data: null,
+                            error: 'response was not serialisable: ' + error.message });
+  }
+
+  if (json.length <= RESPONSE_CHUNK_CHARS) {
+    chrome.runtime.sendMessage(Object.assign({ type: 'api_response', id: message.id },
+                                             JSON.parse(json))).catch(() => {});
+    return;
+  }
+
+  const total = Math.ceil(json.length / RESPONSE_CHUNK_CHARS);
+  for (let index = 0; index < total; index += 1) {
+    chrome.runtime.sendMessage({
+      type: 'api_response_chunk',
+      id: message.id,
+      total_chunks: total,
+      chunk_index: index,
+      chunk_data: json.slice(index * RESPONSE_CHUNK_CHARS, (index + 1) * RESPONSE_CHUNK_CHARS)
+    }).catch(() => {});
+  }
+}
+
 window.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || data.source !== 'gemini-proxy-ready') return;
@@ -81,13 +127,7 @@ window.addEventListener('message', (event) => {
     if (!message) return;
 
     if (message.source === 'gemini-proxy-response') {
-      chrome.runtime.sendMessage({
-        type: 'api_response',
-        id: message.id,
-        status: message.status,
-        data: message.data,
-        error: message.error
-      }).catch(() => {});
+      deliverResponse(message);
       return;
     }
 

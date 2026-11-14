@@ -333,6 +333,38 @@ async function handleApiRequest(message) {
   }
 }
 
+/**
+ * Answers too big for one message arrive as numbered pieces; put them back in
+ * order. In-memory only: a transfer takes seconds, and a worker that dies
+ * mid-transfer has lost the request anyway.
+ */
+const pendingResponses = new Map();
+
+function collectResponseChunk(message) {
+  const { id, total_chunks: total, chunk_index: index, chunk_data: data } = message;
+  if (!Number.isInteger(total) || total < 1 || total > 512) return null;
+  if (!Number.isInteger(index) || index < 0 || index >= total) return null;
+  if (typeof data !== 'string') return null;
+
+  const entry = pendingResponses.get(id) || { parts: new Array(total), total };
+  if (entry.total !== total) {
+    pendingResponses.delete(id);
+    return null;
+  }
+  entry.parts[index] = data;
+  pendingResponses.set(id, entry);
+
+  const received = entry.parts.filter((part) => typeof part === 'string').length;
+  if (received < total) return null;
+
+  pendingResponses.delete(id);
+  try {
+    return JSON.parse(entry.parts.join(''));
+  } catch (error) {
+    return { status: 0, data: null, error: 'reassembled response was not valid JSON' };
+  }
+}
+
 // ── Content-script messages ─────────────────────────────────────────────────
 
 function isTrustedGeminiSender(sender) {
@@ -389,6 +421,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return false;
 
+    case 'api_response_chunk': {
+      const assembled = collectResponseChunk(message);
+      if (assembled === null) {
+        sendResponse({ ok: true, pending: true });
+        return false;
+      }
+      message = Object.assign({}, message, assembled);
+      // fall through to the single-message path below
+    }
+    // eslint-disable-next-line no-fallthrough
     case 'api_response': {
       // Only the tab we route to may answer, otherwise a stale tab could
       // inject results into someone else's request.

@@ -377,6 +377,7 @@ def route_bridge_message(message):
     if queue is None:
         # The HTTP client already gave up. Dropping is correct: there is
         # nobody left to deliver to, and the extension should not retry.
+        log("no waiter for %s id=%s (client already gone)", message_type, request_id[:8])
         return
 
     if message_type == "api_response":
@@ -1327,6 +1328,7 @@ class APIHandler(BaseHTTPRequestHandler):
             return
         request_id = str(uuid.uuid4())
         queue = register_request(request_id)
+        log("request %s opened (%s)", request_id[:8], model)
 
         message = {
             "type": "api_request",
@@ -1384,6 +1386,7 @@ class APIHandler(BaseHTTPRequestHandler):
             self._error(500, "proxy misconfigured: %s" % exc)
             return
 
+        log("request %s answered (%s)", request_id[:8], item["kind"])
         if item["kind"] != "response":
             self._error(502, "bridge sent a streaming event for a non-streaming request")
             return
