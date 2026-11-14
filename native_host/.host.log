@@ -14,3 +14,7 @@
 2026-11-14 14:28:12  pid=150860  started on 127.0.0.1:50561 in native role, caller=<none>
 2026-11-14 14:28:13  pid=150860  native port closed after 0.4s — Chrome ended the session
 2026-11-14 14:28:14  pid=150870  started on 127.0.0.1:58841 in http-only role, caller=<none>
+2026-11-14 14:35:30  pid=152229  started on 127.0.0.1:47679 in http-only role, caller=<none>
+2026-11-14 14:35:32  pid=152239  started on 127.0.0.1:58877 in native role, caller=<none>
+2026-11-14 14:35:32  pid=152239  native port closed after 0.5s — Chrome ended the session
+2026-11-14 14:35:33  pid=152249  started on 127.0.0.1:53959 in http-only role, caller=<none>
