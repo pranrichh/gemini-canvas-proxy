@@ -17,7 +17,7 @@
 let proxyPort = null;
 
 /** Last known native-host state, mirrored from the service worker. */
-let bridgeState = { nativeConnected: false, protocol: 0, port: 0 };
+let bridgeState = { nativeConnected: false, protocol: 0, port: 0, error: '' };
 
 /** Pings between background refreshes. 12 × 5 s keeps the worker quiet. */
 const REFRESH_EVERY_N_PINGS = 12;
@@ -47,7 +47,8 @@ function refreshBridgeState() {
         bridgeState = {
           nativeConnected: Boolean(state.nativeConnected),
           protocol: state.protocol || 0,
-          port: state.port || 0
+          port: state.port || 0,
+          error: state.error || ''
         };
       }
     })
@@ -101,7 +102,8 @@ window.addEventListener('message', (event) => {
         seq: message.seq,
         nativeConnected: bridgeState.nativeConnected,
         protocol: bridgeState.protocol,
-        port: bridgeState.port
+        port: bridgeState.port,
+        error: bridgeState.error
       });
       pingCount += 1;
       if (pingCount % REFRESH_EVERY_N_PINGS === 0) refreshBridgeState();
@@ -122,7 +124,8 @@ window.addEventListener('message', (event) => {
         source: 'gemini-proxy-ack',
         nativeConnected: bridgeState.nativeConnected,
         protocol: bridgeState.protocol,
-        port: bridgeState.port
+        port: bridgeState.port,
+        error: bridgeState.error
       });
     })
     .catch(() => {

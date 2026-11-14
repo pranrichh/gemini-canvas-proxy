@@ -1,0 +1,6 @@
+2026-11-14 11:29:45  pid=94535  exited with cannot listen on 127.0.0.1:8765 (Address already in use) — another process is probably already serving the proxy  argv=['chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/']  env_port=None
+2026-11-14 11:31:02  pid=95446  started on 127.0.0.1:44027 in http-only role, caller=<none>
+2026-11-14 11:31:03  pid=95454  started on 127.0.0.1:43663 in native role, caller=<none>
+2026-11-14 11:31:03  pid=95454  native port closed after 0.3s — Chrome ended the session
+2026-11-14 11:31:04  pid=95462  started on 127.0.0.1:50113 in http-only role, caller=<none>
+2026-11-14 11:34:21  pid=96895  started on 127.0.0.1:8765 in native role, caller=chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/

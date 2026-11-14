@@ -233,6 +233,36 @@ done
 
 [ "$installed" -gt 0 ] || die "no manifest installed; nothing will work until one is"
 
+# Snap Chromium resolves its config directory through the snap's own HOME, which
+# is not the same path the manifest was written to above. The system-wide
+# location is independent of that layout, so for a snap install it is the
+# reliable one. It needs root, so it is attempted non-interactively and skipped
+# with instructions if that is not possible.
+if [ -d "$HOME/snap/chromium" ]; then
+    SYSTEM_DIR="/etc/chromium/native-messaging-hosts"
+    SYSTEM_MANIFEST="$SYSTEM_DIR/$NATIVE_HOST_NAME.json"
+    say ""
+    if sudo -n true 2>/dev/null; then
+        sudo mkdir -p "$SYSTEM_DIR"
+        sudo tee "$SYSTEM_MANIFEST" >/dev/null <<EOF
+{
+  "name": "$NATIVE_HOST_NAME",
+  "description": "Gemini Canvas Proxy — OpenAI-compatible API backed by a Canvas tab",
+  "path": "$WRAPPER",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://$EXTENSION_ID/"]
+}
+EOF
+        sudo chmod 644 "$SYSTEM_MANIFEST"
+        ok "system-wide manifest (snap): $SYSTEM_MANIFEST"
+    else
+        warn "snap Chromium also reads a system-wide manifest, which needs sudo:"
+        warn "  write the following to $SYSTEM_MANIFEST"
+        warn "    {\"name\":\"$NATIVE_HOST_NAME\",\"path\":\"$WRAPPER\","
+        warn "     \"type\":\"stdio\",\"allowed_origins\":[\"chrome-extension://$EXTENSION_ID/\"]}"
+    fi
+fi
+
 # ── next steps ──────────────────────────────────────────────────────────────
 
 say ""

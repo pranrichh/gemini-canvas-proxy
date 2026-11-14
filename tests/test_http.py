@@ -138,6 +138,9 @@ def setUpModule():
     os.environ["PROXY_REQUEST_TIMEOUT"] = "10"
 
     proxy.outbound_sender = proxy.send_to_bridge
+    # These tests exercise the split deployment, where the bridge is the Unix
+    # socket rather than stdio.
+    proxy.transport = "socket"
     proxy.pending_requests.clear()
 
     threading.Thread(target=proxy.serve_bridge_socket, args=(socket_path,), daemon=True).start()

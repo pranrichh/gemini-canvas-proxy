@@ -1,39 +1,36 @@
-# ──────────────────────────────────────────────────────────────────────────────
-# Gemini Canvas Proxy — VPS / Tailscale override
-# ──────────────────────────────────────────────────────────────────────────────
-# Merges ON TOP OF docker-compose.yml. Re-binds both the proxy HTTP API
-# (8765) and the noVNC web UI (6080) to 0.0.0.0 so a Tailscale IP
-# (e.g. 100.x.y.z) can reach them.
+# ─────────────────────────────────────────────────────────────────────────────
+# VPS / Tailscale override
 #
-# Usage:
+# Merges on top of docker-compose.yml and publishes both the proxy API (8765)
+# and the noVNC UI (6080) on every interface, so a tailnet address such as
+# 100.x.y.z can reach them.
+#
 #   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d
 #
+# The `!override` tag matters. Compose appends port lists when merging files, so
+# without it you end up asking Docker to publish 0.0.0.0:6080 *and*
+# 127.0.0.1:6080, and the container refuses to start with
+# "failed to bind host port 127.0.0.1:6080/tcp: address already in use".
+# `!override` replaces the list instead of extending it.
+#
 # Security:
-#   - The proxy requires the bearer token generated on first startup.
-#     Authentication is not a substitute for network isolation: keep 8765
-#     behind Tailscale or another private mesh/firewall and keep the token
-#     out of shell history, compose files, and logs.
-#   - noVNC has no VNC password by default. Exposing 6080 on 0.0.0.0
-#     means anyone with the URL can drive the in-container Chromium
-#     and see whatever you see in the browser. Same caveat — keep it
-#     behind Tailscale, or set the VNC_PASSWORD env var and update
-#     entrypoint.sh to pass it to x11vnc via -rfbauth.
-# ──────────────────────────────────────────────────────────────────────────────
+#   - The proxy requires the bearer token generated on first start. That is
+#     authentication, not isolation: keep 8765 behind Tailscale or another
+#     private mesh, and keep the token out of shell history and compose files.
+#   - noVNC has no password. Anyone who can reach 6080 can drive the in-container
+#     Chromium and see the session. Same rule: private network in front, or
+#     terminate the port mapping at a local reverse proxy that authenticates.
+# ─────────────────────────────────────────────────────────────────────────────
 
 services:
   proxy:
-    ports:
-      # 0.0.0.0:6080:6080 — noVNC reachable from every interface including
-      # the tailnet IP. Compose merges port lists by APPEND-ing, so the
-      # loopback-only bindings from docker-compose.yml stay; this adds
-      # an additional all-interfaces binding on top of them. Remove the
-      # loopback entries from docker-compose.yml if you want pure 0.0.0.0.
+    ports: !override
       - "6080:6080"
       - "8765:8765"
 
     environment:
-      # Bind on all interfaces INSIDE the container too, so the
-      # port-forwards above have something to forward to.
+      # Bind all interfaces inside the container too, so the published ports
+      # have something to forward to.
       PROXY_BIND: 0.0.0.0
       PROXY_PORT: "8765"
       NOVNC_PORT: "6080"

@@ -47,7 +47,6 @@
   .masthead {
     display: flex;
     align-items: baseline;
-    justify-content: space-between;
     gap: 16px;
     padding-bottom: 18px;
     border-bottom: 1px solid var(--line);
@@ -67,13 +66,6 @@
     height: 18px;
     flex: none;
     color: var(--accent);
-  }
-
-  .version {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--faint);
-    letter-spacing: 0.02em;
   }
 
   .tagline {
@@ -386,13 +378,16 @@
 <main class="shell">
   <header class="masthead">
     <div class="wordmark">
+      <!-- LOGO SLOT. Replace this <svg> with the project mark. It renders at
+           18×18 next to the wordmark; keeping it inline keeps the page free of
+           external requests, which matters because the page is pasted into a
+           sandbox that may not be allowed to fetch one. -->
       <svg class="mark" viewBox="0 0 20 20" fill="none" aria-hidden="true">
         <path d="M10 1.5 12.4 7.6 18.5 10 12.4 12.4 10 18.5 7.6 12.4 1.5 10 7.6 7.6Z"
               stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
       </svg>
       <span>Gemini Canvas Proxy</span>
     </div>
-    <span class="version">v2.0.0</span>
   </header>
   <p class="tagline">OpenAI-compatible endpoint running over a private channel to this page.</p>
 
@@ -523,6 +518,7 @@ const state = {
   nativeConnected: false,
   hostPort: 0,
   protocol: 0,
+  hostError: '',
   pingSeq: 0,
   missedPongs: 0,
   stats: { requests: 0, ok: 0, errors: 0, tokens: 0 },
@@ -531,6 +527,12 @@ const state = {
 };
 
 // ── formatting ─────────────────────────────────────────────────────────────
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
 
 function clock(date) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -584,8 +586,10 @@ function renderSummary() {
   } else {
     key = 'degraded';
     title = 'Extension connected, native host offline';
-    note = 'The page and the extension are talking, but the Python host is not running. '
-         + 'Install it with <code>./setup.sh</code> and reload the extension.';
+    note = state.hostError
+      ? 'Chrome said: <code>' + escapeHtml(state.hostError) + '</code>'
+      : 'The page and the extension are talking, but the Python host is not running. '
+        + 'Install it with <code>./setup.sh</code> and reload the extension.';
   }
 
   nodes.summary.dataset.state = key;
@@ -936,6 +940,7 @@ function handshake() {
       state.nativeConnected = Boolean(data.nativeConnected);
       state.hostPort = data.port || 0;
       state.protocol = data.protocol || 0;
+      state.hostError = data.error || '';
       state.missedPongs = 0;
       renderSummary();
 
@@ -956,6 +961,7 @@ function handshake() {
       state.missedPongs = 0;
       state.nativeConnected = Boolean(data.nativeConnected);
       state.hostPort = data.port || state.hostPort;
+      state.hostError = data.error || '';
       if (!state.handshaked) state.handshaked = true;
       renderSummary();
       return;

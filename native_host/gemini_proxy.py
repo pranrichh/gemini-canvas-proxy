@@ -160,6 +160,35 @@ def env_flag(name):
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def host_log_path():
+    """Where a fatal startup error is written.
+
+    Chrome gives the host a stderr pipe that nothing reads, so a crash there
+    leaves no trace at all — the only visible symptom is the browser restarting
+    the process forever. This file is the difference between a crash loop and a
+    bug report.
+    """
+    return os.environ.get(
+        "PROXY_LOG_FILE",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".host.log"),
+    )
+
+
+def record_fatal(detail):
+    try:
+        path = host_log_path()
+        try:
+            if os.path.getsize(path) > 64 * 1024:
+                os.replace(path, path + ".1")
+        except OSError:
+            pass
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("%s  pid=%d  %s\n" % (
+                time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid(), detail))
+    except OSError:
+        pass
+
+
 def token_file_path():
     return os.environ.get(
         "PROXY_TOKEN_FILE",
@@ -282,6 +311,12 @@ def chunk_request(serialized, request_id):
 # ───────────────────────────────────────────────────────────────────────────
 # Each in-flight HTTP request owns a Queue. The bridge reader thread pushes
 # events into the matching queue and never blocks on a slow client.
+
+# How this process reaches the browser: "native" when Chrome launched us and we
+# own stdio, "socket" when we are the --http-only half of the container split.
+# /health has to report the difference, because "no socket connected" means
+# something completely different in each case.
+transport = "native"
 
 pending_requests = {}
 pending_lock = threading.Lock()
@@ -1259,10 +1294,15 @@ class APIHandler(BaseHTTPRequestHandler):
     # ── helpers ────────────────────────────────────────────────────────────
 
     def _bridge_snapshot(self):
+        if transport == "native":
+            # stdio is the bridge. This process exists because Chrome started it
+            # and is holding the other end of the pipes.
+            return {"transport": "native", "connected": True, "connected_seconds": 0}
         with bridge_lock:
             connected = bridge_connection is not None
             since = bridge_connected_at
         return {
+            "transport": "socket",
             "connected": connected,
             "connected_seconds": round(time.monotonic() - since, 1) if since else 0,
         }
@@ -1459,6 +1499,7 @@ def run_stdio_bridge(socket_path, port):
 
 def main():
     global outbound_sender
+    started_monotonic = time.monotonic()
 
     parser = argparse.ArgumentParser(
         description="OpenAI-compatible HTTP API backed by Gemini Canvas.",
@@ -1469,7 +1510,12 @@ def main():
                       help="serve HTTP and accept one bridge on a Unix socket")
     role.add_argument("--bridge-only", action="store_true",
                       help="pump native messaging stdio to the Unix socket")
-    args = parser.parse_args()
+    # Chrome invokes a native messaging host as `path chrome-extension://<id>/`
+    # — the calling origin arrives as a positional argument. parse_args() would
+    # reject it as unrecognised and exit 2, which Chrome reports as
+    # "Native host has exited", once per service-worker wake, forever.
+    args, passthrough = parser.parse_known_args()
+    caller_origin = passthrough[0] if passthrough else ""
 
     try:
         port = env_int("PROXY_PORT", DEFAULT_PORT, minimum=1, maximum=65535)
@@ -1487,13 +1533,25 @@ def main():
             return 1
         return 0
 
-    server = ThreadedHTTPServer((bind, port), APIHandler)
+    try:
+        server = ThreadedHTTPServer((bind, port), APIHandler)
+    except OSError as exc:
+        raise SystemExit(
+            "cannot listen on %s:%d (%s) — another process is probably already "
+            "serving the proxy" % (bind, port, exc.strerror or exc)
+        )
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    log("HTTP listening on http://%s:%d", bind, port)
+    log("HTTP listening on http://%s:%d (pid %d)", bind, port, os.getpid())
+    record_fatal("started on %s:%d in %s role, caller=%s" % (
+        bind, port,
+        "http-only" if args.http_only else "bridge-only" if args.bridge_only else "native",
+        caller_origin or "<none>"))
     if bind not in ("127.0.0.1", "localhost", "::1"):
         warn("listening on %s; the bearer token is the only access control", bind)
 
     if args.http_only:
+        global transport
+        transport = "socket"
         outbound_sender = send_to_bridge
         try:
             serve_bridge_socket(socket_path)
@@ -1525,10 +1583,25 @@ def main():
             break
         route_bridge_message(message)
 
+    # Reaching here means stdin closed. That is either a clean browser shutdown
+    # or the extension dropping the port mid-flight; the log distinguishes it
+    # from a crash, which would have produced a traceback instead.
     log("native port closed; shutting down")
+    record_fatal("native port closed after %.1fs — Chrome ended the session" % (
+        time.monotonic() - started_monotonic))
     server.shutdown()
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            record_fatal("exited with %s  argv=%r  env_port=%r" % (
+                exc.code, sys.argv[1:], os.environ.get("PROXY_PORT")))
+        raise
+    except BaseException:
+        import traceback
+        record_fatal("unhandled exception\n" + traceback.format_exc())
+        raise

@@ -27,6 +27,8 @@ let hostReady = false;
 let hostProtocol = 0;
 /** The HTTP port the host reports in `host_ready`; shown in the Canvas page. */
 let hostPort = 0;
+/** Why the last connection attempt failed, verbatim from Chrome. */
+let hostError = '';
 
 /**
  * Mirrors chrome.storage.session so the hot path can answer a status question
@@ -76,7 +78,12 @@ function connectNative() {
 
   nativePort.onDisconnect.addListener(() => {
     const reason = chrome.runtime.lastError?.message;
-    console.warn('[proxy] native host disconnected' + (reason ? ': ' + reason : ''));
+    // Kept and surfaced in the Canvas page. "Native host has exited" and
+    // "Specified native messaging host not found" have completely different
+    // causes, and asking a user to open a service-worker console to tell them
+    // apart is a bad trade.
+    hostError = reason || 'the native host process exited';
+    console.warn('[proxy] native host disconnected: ' + hostError);
     nativePort = null;
     // A host that failed to launch never sent host_ready, so the broadcast is
     // already correct; a host that died mid-session needs the transition.
@@ -93,6 +100,7 @@ function onNativeMessage(message) {
     hostReady = true;
     hostProtocol = message.protocol || 0;
     hostPort = message.port || 0;
+    hostError = '';
     if (hostProtocol !== PROTOCOL_VERSION) {
       console.warn(
         `[proxy] protocol mismatch: host speaks ${hostProtocol}, extension speaks ${PROTOCOL_VERSION}. Reload the extension.`
@@ -273,9 +281,12 @@ async function handleApiRequest(message) {
     // No content script in that tab at all — usually a page that has not
     // finished loading, or one open before the extension was installed.
     await setCanvasState(tabId, false);
+    // "Receiving end does not exist" almost always means the tab predates the
+    // extension: content scripts are injected at load, not retroactively.
     respondError(
       request.id,
-      'Gemini tab is not accepting messages yet (' + error.message + '). Reload the tab.'
+      'That Gemini tab was opened before the extension loaded, so it has no relay. '
+      + 'Reload the tab, then press Preview again. (' + error.message + ')'
     );
     return;
   }
@@ -310,7 +321,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(() => {
           console.log('[proxy] canvas page ready in tab', sender.tab.id);
           sendResponse({
-            ok: true, nativeConnected: hostReady, protocol: hostProtocol, port: hostPort
+            ok: true, nativeConnected: hostReady, protocol: hostProtocol,
+            port: hostPort, error: hostError
           });
         })
         .catch((error) => sendResponse({ ok: false, reason: error.message }));
@@ -318,7 +330,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'bridge_state_request':
       sendResponse({
-        ok: true, nativeConnected: hostReady, protocol: hostProtocol, port: hostPort
+        ok: true, nativeConnected: hostReady, protocol: hostProtocol,
+        port: hostPort, error: hostError
       });
       return false;
 
