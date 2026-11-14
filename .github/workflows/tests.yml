@@ -27,6 +27,21 @@ jobs:
       - name: Run tests
         run: python3 -m unittest discover -s tests -v
 
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The service worker cannot be reached from Python, and its worst bug only
+      # appears after Chrome evicts it mid-request. This stubs the chrome API and
+      # replays that exact state.
+      - name: Check the service-worker relay guard
+        run: node tests/extension/relay-guard.js
+
   docs:
     runs-on: ubuntu-latest
     steps:
