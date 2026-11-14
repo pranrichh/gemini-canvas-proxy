@@ -42,7 +42,7 @@ Docker: `docker compose up -d --build`, then noVNC at `http://127.0.0.1:6080`.
 </p>
 
 <p align="center">
-  <a href="docs/architecture.md">Architecture</a> · <a href="docs/api.md">API</a> · <a href="docs/deployment.md">Deployment</a> · <a href="docs/security.md">Security</a> · <a href="docs/troubleshooting.md">Troubleshooting</a> · <a href="docs/integrations.md">Integrations</a>
+  <a href="docs/architecture.md">Architecture</a> · <a href="docs/api.md">API</a> · <a href="docs/configuration.md">Configuration</a> · <a href="docs/deployment.md">Deployment</a> · <a href="docs/security.md">Security</a> · <a href="docs/troubleshooting.md">Troubleshooting</a> · <a href="docs/integrations.md">Integrations</a>
 </p>
 
 ## License
