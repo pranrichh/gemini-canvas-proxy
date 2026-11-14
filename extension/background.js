@@ -328,6 +328,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch((error) => sendResponse({ ok: false, reason: error.message }));
       return true;
 
+    case 'status_request':
+      // Asked by the host through the native port when /diagnostics is hit.
+      // Everything the routing layer knows, so "which tab, and is its preview
+      // actually mounted" is answerable without a devtools console.
+      getCanvasState()
+        .then((state) => sendResponse({
+          ok: true,
+          nativeConnected: hostReady,
+          protocol: hostProtocol,
+          port: hostPort,
+          hostError,
+          canvasTabId: state.tabId,
+          canvasReady: Boolean(state.ready),
+          inflightChunkBuffers: 0
+        }))
+        .catch((error) => sendResponse({ ok: false, reason: error.message }));
+      return true;
+
     case 'bridge_state_request':
       sendResponse({
         ok: true, nativeConnected: hostReady, protocol: hostProtocol,

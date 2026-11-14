@@ -340,6 +340,13 @@ def unregister_request(request_id):
 
 def route_bridge_message(message):
     message_type = message.get("type")
+    if message_type == "ext_status":
+        request_id = message.get("id")
+        with pending_lock:
+            queue = pending_requests.get(request_id)
+        if queue is not None:
+            queue.put({"kind": "ext_status", "data": message.get("data") or {}})
+        return
     request_id = message.get("id")
     if not request_id:
         return
@@ -1087,6 +1094,8 @@ class APIHandler(BaseHTTPRequestHandler):
         this, diagnosing "the key never arrived" means asking someone to open a
         devtools console inside a sandboxed iframe.
         """
+        extension = self._ask_extension()
+
         request_id = str(uuid.uuid4())
         queue = register_request(request_id)
         try:
@@ -1114,9 +1123,24 @@ class APIHandler(BaseHTTPRequestHandler):
             return
         self._json(200, {
             "object": "proxy.diagnostics",
+            "extension": extension,
             "page": item.get("data") or {},
             "bridge": self._bridge_snapshot(),
         })
+
+    def _ask_extension(self):
+        """Ask the service worker which tab it would route to, and whether that
+        tab's preview is mounted. Returns {} if the extension does not answer."""
+        request_id = str(uuid.uuid4())
+        queue = register_request(request_id)
+        try:
+            outbound_sender({"type": "status_request", "id": request_id})
+            item = queue.get(timeout=5)
+            return item.get("data") or {}
+        except (Empty, ConnectionError, OSError):
+            return {}
+        finally:
+            unregister_request(request_id)
 
     def _handle_chat_completions(self):
         started = time.monotonic()

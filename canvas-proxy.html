@@ -634,9 +634,11 @@ function renderSummary() {
   const endpoint = state.hostPort ? 'http://127.0.0.1:' + state.hostPort + '/v1' : 'http://127.0.0.1:8765/v1';
   el('empty-endpoint').textContent = endpoint;
 
-  // Canvas rewrites `const apiKey = "";` at build time. If it did not, every
-  // request will fail with a 401 that looks like an expiry, so say it plainly
-  // and say it before the first request.
+  // Canvas substitutes a key into the declaration above at build time. If it
+  // did not, every request fails with a 401 that looks like an expiry, so say
+  // so plainly and say it before the first request. Note: this file must
+  // contain the declaration exactly once — anything that repeats it verbatim
+  // makes the substitution ambiguous and Canvas declines to make it.
   const keyLine = el('keyline');
   const rewritten = sourceHasInjectedKey();
   if (apiKey) {
@@ -969,7 +971,8 @@ async function handleRequest(message) {
     fail(
       id,
       'Canvas did not inject an API key',
-      'The line `const apiKey = "";` must be present and unmodified. Re-paste this page into Canvas.'
+      'The apiKey declaration must be present, unmodified, and the only copy of itself in the file. '
+      + 'Re-paste this page into Canvas.'
     );
     return;
   }
