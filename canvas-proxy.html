@@ -191,6 +191,16 @@
 
   /* ── metrics ──────────────────────────────────────────────── */
 
+  .keyline {
+    margin: 10px 0 0;
+    font-size: 12px;
+    color: var(--faint);
+    font-family: var(--mono);
+  }
+
+  .keyline[data-state="ok"] { color: var(--muted); }
+  .keyline[data-state="missing"] { color: var(--warn); }
+
   .metrics {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -416,6 +426,8 @@
     </div>
   </section>
 
+  <p class="keyline" id="keyline"></p>
+
   <section class="metrics" aria-label="Session metrics">
     <div class="metric">
       <div class="metric-value" id="m-requests">0</div>
@@ -462,9 +474,10 @@
 </main>
 
 <script>
-// Canvas replaces this empty string with a real key at compile time. The
-// literal form matters: if Canvas ever stops injecting, `apiKey` stays empty
-// and every request fails with a 401 instead of silently going unauthenticated.
+// ═══════════════════════════════════════════════════════════════
+// CANVAS AUTO-INJECT — Canvas replaces the empty string with
+// the real API key at compile time. DO NOT modify this line.
+// ═══════════════════════════════════════════════════════════════
 const apiKey = "";
 
 const API_ORIGIN = 'https://generativelanguage.googleapis.com';
@@ -527,6 +540,17 @@ const state = {
 };
 
 // ── formatting ─────────────────────────────────────────────────────────────
+
+// Did Canvas actually substitute a key into the source it served us? Reading
+// our own <script> text answers that; reading the variable answers whether the
+// substitution reached the running scope. They can disagree, and which one
+// disagrees decides the fix.
+function sourceHasInjectedKey() {
+  const scripts = Array.prototype.slice.call(document.querySelectorAll('script:not([src])'));
+  return scripts.some(function (script) {
+    return /apiKey\s*=\s*["'][^"']{20,}["']/.test(script.textContent || '');
+  });
+}
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (c) => (
@@ -609,6 +633,21 @@ function renderSummary() {
 
   const endpoint = state.hostPort ? 'http://127.0.0.1:' + state.hostPort + '/v1' : 'http://127.0.0.1:8765/v1';
   el('empty-endpoint').textContent = endpoint;
+
+  // Canvas rewrites `const apiKey = "";` at build time. If it did not, every
+  // request will fail with a 401 that looks like an expiry, so say it plainly
+  // and say it before the first request.
+  const keyLine = el('keyline');
+  const rewritten = sourceHasInjectedKey();
+  if (apiKey) {
+    keyLine.dataset.state = 'ok';
+    keyLine.textContent = 'API key: ' + apiKey.length + ' characters, source rewritten: '
+      + (rewritten ? 'yes' : 'no');
+  } else {
+    keyLine.dataset.state = 'missing';
+    keyLine.textContent = 'API key: empty · served source rewritten: '
+      + (rewritten ? 'yes (but the variable is empty)' : 'no');
+  }
 }
 
 function renderMetrics() {
@@ -895,6 +934,29 @@ async function handleRequest(message) {
   const { id, path, body, stream } = message;
   const started = performance.now();
 
+  // /diag: report this page's own view of the world. The page is the only part
+  // of the chain that cannot be inspected from the host, so it answers for
+  // itself instead of making someone open a devtools console.
+  if (path === '/diag') {
+    post({
+      source: 'gemini-proxy-response',
+      id,
+      status: 200,
+      data: {
+        api_key_length: apiKey ? apiKey.length : 0,
+        source_rewritten: sourceHasInjectedKey(),
+        sees_native_host_port: state.hostPort || 0,
+        handshaked: state.handshaked,
+        protocol: state.protocol,
+        href: location.href,
+        ready_state: document.readyState,
+        script_count: document.querySelectorAll('script:not([src])').length
+      },
+      error: null
+    });
+    return;
+  }
+
   state.stats.requests += 1;
   renderMetrics();
 
@@ -1000,11 +1062,18 @@ function startHeartbeat() {
 
     if (!state.handshaked) return;
     state.missedPongs += 1;
-    if (state.missedPongs >= MISSED_PINGS_BEFORE_OFFLINE && state.handshaked) {
+    if (state.missedPongs >= MISSED_PINGS_BEFORE_OFFLINE) {
       // Three silent pings means the relay is gone, whatever the last ack said.
+      // The content script's world can be torn down and re-injected — an
+      // extension reload, a host restart — and when that happens the port we
+      // hold is dead. Demoting without re-handshaking would leave the page
+      // permanently offline until someone reloaded the tab by hand.
       state.handshaked = false;
       state.nativeConnected = false;
+      state.port = null;
+      state.missedPongs = 0;
       renderSummary();
+      handshake();
     }
   }, PING_INTERVAL_MS);
 }

@@ -1037,6 +1037,11 @@ class APIHandler(BaseHTTPRequestHandler):
                 for model, description in MODEL_CATALOG
             ]})
             return
+        if path == "/diagnostics":
+            if not self._authorized():
+                return
+            self._handle_diagnostics()
+            return
         if path.startswith("/v1/models/"):
             if not self._authorized():
                 return
@@ -1074,6 +1079,44 @@ class APIHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     # ── handlers ───────────────────────────────────────────────────────────
+
+    def _handle_diagnostics(self):
+        """Ask the Canvas page what it can see, and return its answer.
+
+        The page is the only component the host cannot inspect directly. Without
+        this, diagnosing "the key never arrived" means asking someone to open a
+        devtools console inside a sandboxed iframe.
+        """
+        request_id = str(uuid.uuid4())
+        queue = register_request(request_id)
+        try:
+            outbound_sender({
+                "type": "api_request",
+                "id": request_id,
+                "method": "GET",
+                "path": "/diag",
+                "body": None,
+                "headers": {},
+                "stream": False,
+            })
+            item = queue.get(timeout=10)
+        except Empty:
+            self._error(504, "the Canvas page did not answer the diagnostics request")
+            return
+        except (ConnectionError, OSError) as exc:
+            self._error(502, "bridge unavailable: %s" % exc)
+            return
+        finally:
+            unregister_request(request_id)
+
+        if item.get("error"):
+            self._error(502, item["error"])
+            return
+        self._json(200, {
+            "object": "proxy.diagnostics",
+            "page": item.get("data") or {},
+            "bridge": self._bridge_snapshot(),
+        })
 
     def _handle_chat_completions(self):
         started = time.monotonic()
