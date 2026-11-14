@@ -585,7 +585,16 @@ const state = {
   pingSeq: 0,
   missed: 0,
   rows: [],
-  stats: { requests: 0, answered: 0, failed: 0, inbound: 0, outbound: 0, total: 0 },
+  stats: { requests: 0, answered: 0, failed: 0, inbound: 0, outbound: 0, total: 0,
+           opened: 0, settled: 0 },
+  // A relay that never arrived is still trying; one that was here and left is
+  // broken. Without this the page says "Connecting" forever and keeps the
+  // travel animation running over a dead link.
+  everConnected: false,
+  // The last Gemini call this page made and has not finished. A request that
+  // never comes back is either still here or never arrived, and only the page
+  // can say which.
+  lastCall: null,
   durations: []
 };
 
@@ -638,8 +647,8 @@ function renderStatus() {
   let key = 'ready';
 
   if (!state.handshaked) {
-    key = 'degraded';
-    word = 'Connecting';
+    key = state.everConnected ? 'down' : 'degraded';
+    word = state.everConnected ? 'Disconnected' : 'Connecting';
   } else if (!state.nativeConnected) {
     key = 'down';
     word = 'Host offline';
@@ -657,16 +666,24 @@ function renderStatus() {
   setNode($('n-relay'), $('v-relay'), state.handshaked, state.handshaked ? 'relaying' : 'waiting');
   setNode($('n-host'), $('v-host'), state.nativeConnected, state.nativeConnected ? 'connected' : 'offline');
 
-  // The arrow only travels while a link is still being established.
+  // Green means the whole chain carries traffic, so a wire is only on when
+  // every link behind it is. The travelling arrow means "still establishing":
+  // it stops the moment a link that had been up goes down, because waiting for
+  // something that is gone is not a connection attempt.
+  const live = state.handshaked && state.nativeConnected;
+  const starting = !state.handshaked && !state.everConnected;
+  const lost = !state.handshaked && state.everConnected;
+
   const relayWire = $('w-relay');
-  relayWire.dataset.on = state.handshaked ? '1' : '0';
-  relayWire.dataset.pending = state.handshaked ? '0' : '1';
-  relayWire.dataset.broken = '0';
+  relayWire.dataset.on = live ? '1' : '0';
+  relayWire.dataset.pending = starting ? '1' : '0';
+  relayWire.dataset.broken = lost ? '1' : '0';
 
   const hostWire = $('w-host');
-  hostWire.dataset.on = state.nativeConnected ? '1' : '0';
-  hostWire.dataset.pending = state.handshaked && !state.nativeConnected ? '0' : '0';
-  hostWire.dataset.broken = state.handshaked && !state.nativeConnected ? '1' : '0';
+  const hostLost = state.handshaked && !state.nativeConnected;
+  hostWire.dataset.on = live ? '1' : '0';
+  hostWire.dataset.pending = '0';
+  hostWire.dataset.broken = hostLost ? '1' : '0';
 }
 
 /* ── render: stats ──────────────────────────────────────────────────────── */
@@ -945,7 +962,11 @@ function handleRequest(message) {
         handshaked: state.handshaked,
         protocol: state.protocol,
         host_port_known: state.hostPort,
-        ready_state: document.readyState
+        ready_state: document.readyState,
+        calls_opened: state.stats.opened,
+        calls_settled: state.stats.settled,
+        calls_pending: state.stats.opened - state.stats.settled,
+        last_call: state.lastCall
       },
       error: null
     });
@@ -972,6 +993,9 @@ function handleRequest(message) {
 }
 
 async function runBuffered(id, path, body, base, started) {
+  state.stats.opened += 1;
+  let outcome = 'running';
+  state.lastCall = { id: id, model: base.model, started_at: Date.now(), outcome: outcome };
   try {
     const response = await fetch(buildUrl(path, false), {
       method: 'POST',
@@ -986,6 +1010,7 @@ async function runBuffered(id, path, body, base, started) {
     const ms = performance.now() - started;
 
     if (!response.ok) {
+      outcome = 'failed';
       const detail = (payload.error && payload.error.message) || response.statusText || 'request failed';
       record(Object.assign({}, base, {
         ok: false, code: response.status, ms: ms, error: detail, usage: null,
@@ -1021,6 +1046,7 @@ async function runBuffered(id, path, body, base, started) {
       }
     }
 
+    outcome = 'done';
     record(Object.assign({}, base, {
       ok: true,
       code: response.status,
@@ -1034,9 +1060,16 @@ async function runBuffered(id, path, body, base, started) {
     }));
     reply(id, { status: response.status, data: payload, error: null });
   } catch (error) {
+    outcome = 'failed';
     const message = error.message || String(error);
     record(Object.assign({}, base, { ok: false, code: 0, ms: performance.now() - started, error: message }));
     reply(id, { status: 0, error: message });
+  } finally {
+    state.stats.settled += 1;
+    if (state.lastCall && state.lastCall.id === id) {
+      state.lastCall.outcome = outcome;
+      state.lastCall.finished_at = Date.now();
+    }
   }
 }
 
@@ -1157,6 +1190,7 @@ function handshake() {
 
     if (data.source === 'gemini-proxy-ack') {
       state.handshaked = true;
+      state.everConnected = true;
       state.nativeConnected = Boolean(data.nativeConnected);
       state.hostPort = data.port || state.hostPort;
       state.protocol = data.protocol || 0;
@@ -1172,6 +1206,7 @@ function handshake() {
       state.hostPort = data.port || state.hostPort;
       state.hostError = data.error || '';
       if (!state.handshaked) state.handshaked = true;
+      state.everConnected = true;
       renderStatus();
       return;
     }
