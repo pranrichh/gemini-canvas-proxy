@@ -152,7 +152,11 @@ window.addEventListener('message', (event) => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!proxyPort) {
-    if (message.type === 'api_request') {
+    // This script runs in every frame, and chrome.tabs.sendMessage delivers to
+    // all of them — first answer wins. A sub-frame that has no port must stay
+    // silent, otherwise it beats the top frame that does and every request is
+    // reported as disconnected while the relay is fine.
+    if (message.type === 'api_request' && window === window.top) {
       sendResponse({ ok: false, reason: 'Canvas page is not connected yet. Reload the preview.' });
     }
     return false;

@@ -488,6 +488,19 @@
 </main>
 
 <script>
+// Registered in its own script tag, ahead of the application, so a parse or
+// load error in the main script is still reported. Canvas transforms this page
+// before serving it; a bad transform can leave a reference that throws on load,
+// and without this the page simply never connects and says nothing.
+window.addEventListener('error', function (event) {
+  var box = document.getElementById('boot-error');
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = 'Script error: ' + (event.message || 'unknown')
+    + (event.lineno ? ' (line ' + event.lineno + ')' : '');
+});
+</script>
+<script>
 // ═══════════════════════════════════════════════════════════════
 // CANVAS AUTO-INJECT — Canvas replaces the empty string with
 // the real API key at compile time. DO NOT modify this line.
@@ -512,17 +525,6 @@ const FINISH_REASONS = {
   IMAGE_SAFETY: 'content_filter',
   LANGUAGE: 'content_filter'
 };
-
-// Surface build-time damage. Canvas transforms this script before serving it,
-// and a bad transform throws at load, which used to leave a page that looked
-// fine and simply never connected.
-window.addEventListener('error', function (event) {
-  const box = document.getElementById('boot-error');
-  if (!box) return;
-  box.hidden = false;
-  box.textContent = 'Script error: ' + (event.message || 'unknown')
-    + (event.lineno ? ' (line ' + event.lineno + ')' : '');
-});
 
 const el = (id) => document.getElementById(id);
 const nodes = {
@@ -566,8 +568,8 @@ const state = {
 
 // ── formatting ─────────────────────────────────────────────────────────────
 
-// Did Canvas actually substitute a key into the source it served us? Reading
-// our own <script> text answers that; reading the variable answers whether the
+// Did Canvas actually substitute a key into the source it served us? The text
+// of our own inline script answers that; the variable answers whether the
 // substitution reached the running scope. They can disagree, and which one
 // disagrees decides the fix.
 function sourceHasInjectedKey() {
@@ -657,7 +659,11 @@ function renderSummary() {
   nodes.wireHost.dataset.on = host ? '1' : '0';
 
   const endpoint = state.hostPort ? 'http://127.0.0.1:' + state.hostPort + '/v1' : 'http://127.0.0.1:8765/v1';
-  el('empty-endpoint').textContent = endpoint;
+  // The empty state is removed from the DOM once the first request arrives, so
+  // this element is gone by the second render. Writing to it without a guard
+  // threw on every update after the first request.
+  const endpointNode = el('empty-endpoint');
+  if (endpointNode) endpointNode.textContent = endpoint;
 
   // Canvas substitutes a key into the declaration above at build time. If it
   // did not, every request fails with a 401 that looks like an expiry, so say

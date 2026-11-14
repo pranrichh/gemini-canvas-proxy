@@ -11,3 +11,7 @@
 2026-11-14 11:57:25  pid=101809  started on 127.0.0.1:43403 in http-only role, caller=<none>
 2026-11-14 12:11:47  pid=101393  native port closed after 978.3s — Chrome ended the session
 2026-11-14 12:11:48  pid=104872  started on 127.0.0.1:8765 in native role, caller=chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/
+2026-11-14 12:20:53  pid=107829  started on 127.0.0.1:36251 in http-only role, caller=<none>
+2026-11-14 12:20:54  pid=107837  started on 127.0.0.1:59437 in native role, caller=<none>
+2026-11-14 12:20:55  pid=107837  native port closed after 0.3s — Chrome ended the session
+2026-11-14 12:20:55  pid=107847  started on 127.0.0.1:37507 in http-only role, caller=<none>
