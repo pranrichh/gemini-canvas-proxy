@@ -13,6 +13,7 @@ Docker.
 | GET | `/v1/models` | yes | names that have worked with a Canvas key |
 | GET | `/v1/models/{id}` | yes | one entry from that list |
 | GET | `/status` | yes | bridge state, config, in-flight count |
+| GET | `/diagnostics` | yes | what the extension and the Canvas page can each see |
 | GET | `/health` | no | liveness plus bridge state, for healthchecks |
 | OPTIONS | any | no | CORS preflight, only useful with `PROXY_ALLOWED_ORIGIN` |
 
@@ -21,13 +22,50 @@ Docker.
 ```json
 {
   "status": "ok",
-  "bridge": { "connected": true, "connected_seconds": 412.7 },
+  "bridge": { "transport": "native", "connected": true, "connected_seconds": 0 },
   "uptime_seconds": 913.2
 }
 ```
 
-If `bridge.connected` is false, the process is alive but nothing can reach a
-model. That distinction is what makes the endpoint worth polling.
+`transport` is `native` when Chrome launched this process and stdio is the
+connection, or `socket` when this is the container's `--http-only` half talking
+to a separate bridge process over a Unix socket. In `native` mode `connected` is
+always true while the process runs, because the pipes are the connection. In
+`socket` mode it reports whether a bridge is actually attached, and a false
+value means the process is alive but nothing can reach a model. That distinction
+is what makes the endpoint worth polling.
+
+## Diagnostics
+
+`GET /diagnostics` asks each hop what it can see and returns both answers. It
+exists because the two failure modes that look identical from outside — the
+extension is not routing, and the page is not running — have completely
+different causes, and telling them apart otherwise means opening a devtools
+console inside a sandboxed iframe.
+
+```json
+{
+  "object": "proxy.diagnostics",
+  "extension": {
+    "nativeConnected": true,
+    "protocol": 2,
+    "port": 8765,
+    "canvasTabId": 1234,
+    "canvasReady": true
+  },
+  "page": {
+    "api_key_length": 0,
+    "source_rewritten": false,
+    "handshaked": true,
+    "protocol": 2,
+    "ready_state": "complete"
+  },
+  "bridge": { "transport": "native", "connected": true, "connected_seconds": 0 }
+}
+```
+
+`api_key_length: 0` is normal. Canvas authenticates the request at its own
+boundary; a key appearing in the page is the exception, not the requirement.
 
 ## Chat completions
 
@@ -160,6 +198,43 @@ Image models return a markdown data URL in `message.content`:
 
 It is a data URL rather than a file so the response stays a single JSON object
 with no side channel to clean up.
+
+## Speech
+
+The speech models work through the same endpoint. Name one, send the text to
+speak, and pick a voice:
+
+```json
+{
+  "model": "gemini-2.5-flash-preview-tts",
+  "messages": [{"role": "user", "content": "Say this out loud: the proxy is up."}],
+  "voice": "Puck"
+}
+```
+
+`voice` maps to Gemini's `speechConfig.voiceConfig.prebuiltVoiceConfig`.
+`Kore` is the default when none is given; `Puck`, `Charon`, `Fenrir`, `Aoede`
+and the rest of Gemini's prebuilt voices also work. The request also accepts the
+voice at `extra_body.google.voice` if you would rather not add a top-level field.
+
+Gemini returns headerless 24 kHz mono PCM. The proxy wraps it in a RIFF header
+and returns it where an OpenAI client expects audio:
+
+```json
+"message": {
+  "role": "assistant",
+  "content": "",
+  "audio": { "data": "<base64 wav>", "mime_type": "audio/wav", "format": "wav" }
+}
+```
+
+`content` is empty because there is no text to return — do not read it as a
+failure. The audio is a complete WAV file, so `base64 -d` it and play it, or
+point an `<audio>` tag at the data URL. The Canvas page does the latter, and
+shows the clip's length.
+
+Speech models do not support streaming: a WAV needs its header before the body,
+so `stream: true` on a `-tts` model returns the whole clip in one event.
 
 ## Tools
 

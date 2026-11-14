@@ -566,6 +566,34 @@ class RequestError(ValueError):
         self.status = status
 
 
+def pcm_to_wav(pcm, sample_rate=24000, channels=1, sample_width=2):
+    """Wrap raw PCM in a RIFF header so the result is playable anywhere.
+
+    Gemini's speech models return `audio/L16;codec=pcm;rate=24000`, which is a
+    headerless byte stream. Handing that to a client means asking it to know the
+    rate, the channel count and the endianness; a WAV is self-describing and
+    plays in a browser tab.
+    """
+    byte_rate = sample_rate * channels * sample_width
+    header = b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVE"
+    header += b"fmt " + struct.pack(
+        "<IHHIIHH", 16, 1, channels, sample_rate, byte_rate,
+        channels * sample_width, sample_width * 8,
+    )
+    header += b"data" + struct.pack("<I", len(pcm))
+    return header + pcm
+
+
+def audio_sample_rate(mime):
+    """Pull `rate=` out of a Gemini audio MIME type, defaulting to 24 kHz."""
+    match = re.search(r"rate=(\d+)", mime or "")
+    return int(match.group(1)) if match else 24000
+
+
+def is_audio(mime):
+    return (mime or "").lower().startswith("audio/")
+
+
 def parse_data_uri(url):
     """Return (mime, base64) from a data: URI, or raise RequestError."""
     header, _, payload = url.partition(",")
@@ -709,7 +737,11 @@ def translate_response_format(response_format):
     return {}
 
 
-def openai_to_gemini(body):
+TTS_MODEL_PATTERN = re.compile(r"-tts$")
+DEFAULT_VOICE = "Kore"
+
+
+def openai_to_gemini(body, model=""):
     """Convert an OpenAI chat completion request into Gemini generateContent."""
     if not isinstance(body, dict):
         raise RequestError("request body must be a JSON object")
@@ -865,6 +897,20 @@ def openai_to_gemini(body):
 
     config.update(translate_response_format(body.get("response_format")))
 
+    # Speech models are a different modality, not a different prompt. They need
+    # AUDIO in the response modalities and a voice; without both, Gemini answers
+    # with text and the caller wonders why there is no audio.
+    if TTS_MODEL_PATTERN.search(model or ""):
+        config["responseModalities"] = ["AUDIO"]
+        voice = (
+            body.get("voice")
+            or (body.get("extra_body") or {}).get("google", {}).get("voice")
+            or DEFAULT_VOICE
+        )
+        config["speechConfig"] = {
+            "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}
+        }
+
     # Callers that know Gemini can pass generationConfig fields straight
     # through (thinkingConfig, safetySettings-adjacent knobs, etc.) without
     # this proxy inventing a mapping for each one.
@@ -948,6 +994,7 @@ def gemini_to_openai(gemini_response, model):
 
     text_segments = []
     image_segments = []
+    audio_parts = []
     tool_calls = []
 
     for part in parts:
@@ -956,7 +1003,10 @@ def gemini_to_openai(gemini_response, model):
         elif "inlineData" in part:
             data = part["inlineData"].get("data", "")
             mime = part["inlineData"].get("mimeType", "image/png")
-            image_segments.append("![generated_image](data:%s;base64,%s)" % (mime, data))
+            if is_audio(mime):
+                audio_parts.append((mime, data))
+            else:
+                image_segments.append("![generated_image](data:%s;base64,%s)" % (mime, data))
         elif "functionCall" in part:
             call = part["functionCall"]
             tool_call = {
@@ -986,6 +1036,26 @@ def gemini_to_openai(gemini_response, model):
     }
     if tool_calls:
         completion["choices"][0]["message"]["tool_calls"] = tool_calls
+
+    if audio_parts:
+        # Speech comes back as headerless PCM. Convert the first part to WAV and
+        # expose it where an OpenAI client looks for audio, rather than hiding
+        # it in the text content.
+        import base64 as _b64
+        mime, data = audio_parts[0]
+        try:
+            raw = _b64.b64decode(data)
+            wav = pcm_to_wav(raw, sample_rate=audio_sample_rate(mime))
+            encoded = _b64.b64encode(wav).decode("ascii")
+        except Exception:  # noqa: BLE001 - a decode failure must not lose the text
+            encoded = data
+        completion["choices"][0]["message"]["audio"] = {
+            "data": encoded,
+            "mime_type": "audio/wav",
+            "format": "wav",
+        }
+        completion["choices"][0]["message"]["content"] = content or ""
+
     return completion
 
 
@@ -998,6 +1068,8 @@ MODEL_CATALOG = [
     ("gemini-2.5-flash-preview-05-20", "Gemini 2.5 Flash preview"),
     ("gemini-3.1-flash-image-preview", "Nano Banana 2 — image generation"),
     ("gemini-2.5-flash-image", "Nano Banana — image generation"),
+    ("gemini-2.5-flash-preview-tts", "Gemini 2.5 Flash TTS — speech generation"),
+    ("gemini-2.5-pro-preview-tts", "Gemini 2.5 Pro TTS — higher quality speech"),
 ]
 
 
@@ -1152,7 +1224,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 raise RequestError(
                     "invalid model identifier; use only letters, digits, '.', '_' and '-'"
                 )
-            gemini_body = openai_to_gemini(body)
+            gemini_body = openai_to_gemini(body, model)
         except RequestError as exc:
             self._error(exc.status, str(exc))
             return

@@ -5,22 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gemini Canvas Proxy</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
   :root {
-    --bg: #0c0d10;
-    --panel: #13151a;
-    --panel-hi: #191c22;
-    --line: #262a32;
-    --line-soft: #1d2027;
-    --text: #e9ebef;
-    --muted: #9ba3b0;
-    --faint: #7c8593;
-    --accent: #6ea8fe;
-    --ok: #3fb950;
-    --warn: #d29922;
-    --bad: #f85149;
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    --r: 10px;
+    --bg: #0d0f11;
+    --surface: #15181b;
+    --surface-2: #1a1e22;
+    --line: #262b30;
+    --text: #e8ecef;
+    --muted: #98a2a9;
+    --faint: #6d777e;
+    --accent: #e0a458;
+    --warn: #d9a441;
+    --danger: #e0685c;
+    --sans: "IBM Plex Sans", "Cantarell", "Ubuntu", "DejaVu Sans", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", "Ubuntu Mono", "DejaVu Sans Mono", ui-monospace, monospace;
   }
 
   * { box-sizing: border-box; }
@@ -36,725 +35,627 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  .shell {
-    max-width: 720px;
+  .panel {
+    max-width: 820px;
     margin: 0 auto;
-    padding: 28px 20px 40px;
+    padding: 30px 22px 44px;
   }
 
-  /* ── masthead ─────────────────────────────────────────────── */
+  /* ── header ───────────────────────────────────────────────── */
 
-  .masthead {
+  .head {
     display: flex;
-    align-items: baseline;
-    gap: 16px;
-    padding-bottom: 18px;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    padding-bottom: 16px;
     border-bottom: 1px solid var(--line);
   }
 
-  .wordmark {
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+
+  /* LOGO SLOT — replace this svg with the project mark. Rendered at 16×16;
+     keep it inline so the page makes no image request. */
+  .brand svg { width: 16px; height: 16px; flex: none; color: var(--accent); }
+
+  .endpoint {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    white-space: nowrap;
+    padding-top: 2px;
+  }
+
+  .state {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .state-word {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text);
+  }
+
+  .state[data-state="degraded"] .state-word { color: var(--warn); }
+  .state[data-state="down"] .state-word { color: var(--danger); }
+
+  .state-note {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  /* ── signal path ──────────────────────────────────────────── */
+
+  .path {
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-
-  .mark {
-    width: 18px;
-    height: 18px;
-    flex: none;
-    color: var(--accent);
-  }
-
-  .tagline {
-    margin: 10px 0 0;
-    font-size: 13px;
-    color: var(--muted);
-  }
-
-  /* ── status summary ───────────────────────────────────────── */
-
-  .summary {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    margin-top: 22px;
-  }
-
-  .summary-dot {
-    width: 9px;
-    height: 9px;
-    margin-top: 7px;
-    flex: none;
-    border-radius: 50%;
-    background: var(--faint);
-  }
-
-  .summary[data-state="ok"] .summary-dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.13); }
-  .summary[data-state="degraded"] .summary-dot { background: var(--warn); box-shadow: 0 0 0 3px rgba(210, 153, 34, 0.13); }
-  .summary[data-state="down"] .summary-dot { background: var(--bad); box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.13); }
-  .summary[data-state="connecting"] .summary-dot { background: var(--warn); animation: breathe 1.8s ease-in-out infinite; }
-
-  @keyframes breathe {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .summary[data-state="connecting"] .summary-dot { animation: none; }
-  }
-
-  .summary-title {
-    font-size: 15px;
-    font-weight: 600;
-    margin: 0;
-  }
-
-  .summary-note {
-    margin: 3px 0 0;
-    font-size: 13px;
-    color: var(--muted);
-  }
-
-  .summary-note code {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text);
-    background: var(--panel-hi);
-    border: 1px solid var(--line-soft);
+    margin-top: 20px;
+    padding: 16px 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: 4px;
-    padding: 1px 5px;
   }
 
-  /* ── chain ────────────────────────────────────────────────── */
+  .node { min-width: 0; }
 
-  .chain {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr auto 1fr;
+  .node-top {
+    display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 22px;
-    padding: 14px 16px;
-    background: var(--panel);
-    border: 1px solid var(--line-soft);
-    border-radius: var(--r);
+    font-size: 13px;
+    color: var(--muted);
   }
 
-  .link {
-    min-width: 0;
-  }
-
-  .link-head {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 12px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--faint);
-  }
-
-  .pip {
+  .dia {
     width: 7px;
     height: 7px;
-    border-radius: 50%;
-    background: var(--faint);
     flex: none;
+    transform: rotate(45deg);
+    border: 1px solid var(--faint);
+    background: transparent;
   }
 
-  .link[data-on="1"] .pip { background: var(--ok); }
-  .link[data-on="0"] .pip { background: var(--bad); }
+  .node[data-on="1"] .dia { border-color: var(--accent); background: var(--accent); }
+  .node[data-on="0"] .dia { border-color: var(--danger); background: transparent; }
 
-  .link-value {
+  .node-value {
+    margin-top: 3px;
     font-family: var(--mono);
     font-size: 12px;
-    color: var(--text);
-    margin-top: 4px;
+    color: var(--faint);
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
-  .link[data-on="0"] .link-value { color: var(--bad); }
-  .link[data-on="1"] .link-value { color: var(--muted); }
+  .node[data-on="0"] .node-value { color: var(--danger); }
 
   .wire {
+    flex: 1 1 24px;
     height: 1px;
-    width: 100%;
-    min-width: 12px;
+    min-width: 16px;
     background: var(--line);
   }
 
-  .wire[data-on="1"] { background: var(--ok); opacity: 0.55; }
+  .wire[data-on="1"] { background: var(--accent); opacity: 0.45; }
 
-  /* ── metrics ──────────────────────────────────────────────── */
-
-  .keyline {
-    margin: 10px 0 0;
-    font-size: 12px;
-    color: var(--faint);
-    font-family: var(--mono);
+  .wire[data-pending="1"] {
+    background: repeating-linear-gradient(90deg, var(--faint) 0 4px, transparent 4px 8px);
+    animation: crawl 1.2s linear infinite;
   }
 
-  .boot-error {
-    margin: 8px 0 0;
-    padding: 8px 10px;
-    font-family: var(--mono);
-    font-size: 11px;
-    line-height: 1.45;
-    color: var(--bad);
-    background: rgba(248, 81, 73, 0.07);
-    border: 1px solid rgba(248, 81, 73, 0.3);
-    border-radius: 6px;
-    white-space: pre-wrap;
+  @keyframes crawl { to { background-position: 8px 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .wire[data-pending="1"] { animation: none; }
   }
 
-  .keyline[data-state="ok"] { color: var(--muted); }
-  .keyline[data-state="missing"] { color: var(--warn); }
+  /* ── stats ────────────────────────────────────────────────── */
 
-  .metrics {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 1px;
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
     margin-top: 14px;
-    background: var(--line-soft);
-    border: 1px solid var(--line-soft);
-    border-radius: var(--r);
-    overflow: hidden;
+    padding: 12px 2px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
   }
 
-  .metric {
-    background: var(--panel);
-    padding: 12px 12px 11px;
+  .stat {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 0 14px;
+    border-left: 1px solid var(--line);
   }
 
-  .metric-value {
+  .stat:first-child { padding-left: 0; border-left: 0; }
+
+  .stat b {
     font-family: var(--mono);
-    font-size: 18px;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.2;
+    font-size: 13px;
+    font-weight: 500;
     color: var(--text);
+    font-variant-numeric: tabular-nums;
   }
 
-  .metric-value.is-bad { color: var(--bad); }
-  .metric-value.is-dim { color: var(--faint); }
-
-  .metric-label {
-    margin-top: 2px;
-    font-size: 11px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--faint);
-  }
+  .stat.is-bad b { color: var(--danger); }
 
   /* ── activity ─────────────────────────────────────────────── */
 
-  .panel {
-    margin-top: 14px;
-    background: var(--panel);
-    border: 1px solid var(--line-soft);
-    border-radius: var(--r);
-    overflow: hidden;
-  }
-
-  .panel-head {
+  .log-head {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    padding: 11px 14px;
-    border-bottom: 1px solid var(--line-soft);
-  }
-
-  .panel-title {
-    font-size: 12px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--faint);
-  }
-
-  .panel-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .count {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--faint);
-  }
-
-  .ghost {
-    font: inherit;
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    margin-top: 22px;
+    font-size: 13px;
     color: var(--muted);
+  }
+
+  .log-head button {
+    font: inherit;
+    font-size: 12px;
+    color: var(--faint);
     background: none;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 3px 8px;
+    border: 0;
+    padding: 2px 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .log-head button:hover { color: var(--text); }
+  .log-head button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  .rows { margin-top: 6px; }
+
+  .row { border-bottom: 1px solid var(--line); }
+
+  .row-toggle {
+    display: grid;
+    grid-template-columns: 62px minmax(0, 1fr) 44px 58px 56px 16px;
+    gap: 12px;
+    align-items: baseline;
+    width: 100%;
+    padding: 9px 2px;
+    background: none;
+    border: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
     cursor: pointer;
   }
 
-  .ghost:hover { color: var(--text); border-color: var(--faint); }
-  .ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row-toggle:hover { background: var(--surface); }
+  .row-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-  .log {
-    max-height: 264px;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
+  .c-time { font-family: var(--mono); font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .c-model { font-family: var(--mono); font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .c-code { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .c-code.ok { color: var(--text); }
+  .c-code.bad { color: var(--danger); }
+  .c-ms { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .c-tok { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .c-open { font-size: 11px; line-height: 1; color: var(--muted); text-align: right; }
 
-  .log::-webkit-scrollbar { width: 8px; }
-  .log::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
-
-  .row {
-    display: grid;
-    grid-template-columns: 62px 46px minmax(0, 1fr) 56px 42px;
-    gap: 10px;
-    align-items: baseline;
-    padding: 8px 14px;
-    font-family: var(--mono);
-    font-size: 12px;
-    border-bottom: 1px solid var(--line-soft);
-  }
-
-  .row:last-child { border-bottom: 0; }
-  .row:hover { background: var(--panel-hi); }
-
-  .t { color: var(--faint); font-variant-numeric: tabular-nums; }
-  .verb { color: var(--muted); font-size: 10px; letter-spacing: 0.06em; }
-  .what { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ms { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
-  .code { text-align: right; font-variant-numeric: tabular-nums; }
-
-  .code.ok { color: var(--ok); }
-  .code.bad { color: var(--bad); }
-  .code.mid { color: var(--warn); }
-
-  .row.is-error .what { color: var(--bad); }
+  .row.is-error .c-model { color: var(--danger); }
 
   .detail {
+    display: none;
+    padding: 2px 2px 14px 74px;
+  }
+
+  .row[data-open="1"] .detail { display: block; }
+
+  .detail dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 3px 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .detail dt { color: var(--faint); }
+  .detail dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+
+  .detail pre {
     grid-column: 1 / -1;
     margin: 6px 0 0;
-    padding: 8px 10px;
+    padding: 10px 12px;
+    max-height: 220px;
+    overflow: auto;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 3px;
     font-family: var(--mono);
     font-size: 11px;
-    line-height: 1.45;
+    line-height: 1.5;
     color: var(--muted);
-    background: var(--bg);
-    border: 1px solid var(--line-soft);
-    border-radius: 6px;
     white-space: pre-wrap;
     word-break: break-word;
   }
 
-  .empty {
-    padding: 26px 16px;
-    text-align: center;
-    font-size: 13px;
-    color: var(--muted);
-  }
+  .detail audio { grid-column: 1 / -1; margin-top: 8px; width: 100%; height: 32px; }
 
-  .empty strong {
-    display: block;
-    color: var(--text);
-    font-weight: 600;
-    margin-bottom: 4px;
-  }
-
-  .empty code {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--accent);
-  }
-
-  /* ── footer ───────────────────────────────────────────────── */
-
-  .foot {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    margin-top: 18px;
+  .audio-length {
+    grid-column: 1 / -1;
+    margin-top: 4px;
     font-size: 11px;
     color: var(--faint);
   }
 
-  .foot a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); }
-  .foot a:hover { color: var(--text); }
+  .more { grid-column: 1 / -1; margin-top: 6px; }
 
-  @media (max-width: 560px) {
-    .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .chain { grid-template-columns: 1fr; gap: 4px; }
+  .more summary {
+    font-size: 12px;
+    color: var(--faint);
+    cursor: pointer;
+    list-style: none;
+    width: fit-content;
+    border-bottom: 1px dashed var(--line);
+    padding-bottom: 1px;
+  }
+
+  .more summary::-webkit-details-marker { display: none; }
+  .more summary:hover { color: var(--text); }
+  .more summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  .detail pre::-webkit-scrollbar { width: 8px; }
+  .detail pre::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+
+  .empty { padding: 26px 2px; font-size: 13px; color: var(--muted); }
+  .empty code { font-family: var(--mono); font-size: 12px; color: var(--text); }
+
+  .boot-error {
+    margin-top: 14px;
+    padding: 9px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: 3px;
+    white-space: pre-wrap;
+  }
+
+  @media (max-width: 620px) {
+    .path { flex-wrap: wrap; gap: 6px; }
     .wire { display: none; }
-    .link { padding: 4px 0; }
-    .row { grid-template-columns: 54px minmax(0, 1fr) 52px 40px; }
-    .verb { display: none; }
+    .node { width: 100%; }
+    .row-toggle { grid-template-columns: 54px minmax(0, 1fr) 44px 16px; }
+    .c-ms, .c-tok { display: none; }
+    .detail { padding-left: 2px; }
   }
 </style>
 </head>
 <body>
-<main class="shell">
-  <header class="masthead">
-    <div class="wordmark">
-      <!-- LOGO SLOT. Replace this <svg> with the project mark. It renders at
-           18×18 next to the wordmark; keeping it inline keeps the page free of
-           external requests, which matters because the page is pasted into a
-           sandbox that may not be allowed to fetch one. -->
-      <svg class="mark" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <path d="M10 1.5 12.4 7.6 18.5 10 12.4 12.4 10 18.5 7.6 12.4 1.5 10 7.6 7.6Z"
-              stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+<main class="panel">
+  <header class="head">
+    <div class="brand">
+      <!-- LOGO SLOT -->
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M8 1.2 9.9 6.1 14.8 8 9.9 9.9 8 14.8 6.1 9.9 1.2 8 6.1 6.1Z"
+              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
       </svg>
       <span>Gemini Canvas Proxy</span>
     </div>
+    <div class="endpoint" id="endpoint"></div>
   </header>
-  <p class="tagline">OpenAI-compatible endpoint running over a private channel to this page.</p>
 
-  <section class="summary" id="summary" data-state="connecting" role="status" aria-live="polite">
-    <span class="summary-dot" aria-hidden="true"></span>
-    <div>
-      <p class="summary-title" id="summary-title">Connecting to the extension</p>
-      <p class="summary-note" id="summary-note">Waiting for the relay handshake.</p>
+  <div class="state" id="state" data-state="ready" role="status" aria-live="polite">
+    <span class="state-word" id="state-word">Connecting</span>
+    <span class="state-note" id="state-note"></span>
+  </div>
+
+  <section class="path" aria-label="Connection path">
+    <div class="node" id="n-canvas" data-on="1">
+      <div class="node-top"><span class="dia"></span>Canvas page</div>
+      <div class="node-value" id="v-canvas">running</div>
+    </div>
+    <div class="wire" id="w-relay" data-on="0" data-pending="1"></div>
+    <div class="node" id="n-relay" data-on="0">
+      <div class="node-top"><span class="dia"></span>Extension</div>
+      <div class="node-value" id="v-relay">waiting</div>
+    </div>
+    <div class="wire" id="w-host" data-on="0"></div>
+    <div class="node" id="n-host" data-on="0">
+      <div class="node-top"><span class="dia"></span>Native host</div>
+      <div class="node-value" id="v-host">unknown</div>
     </div>
   </section>
 
-  <section class="chain" aria-label="Connection chain">
-    <div class="link" id="link-canvas" data-on="1">
-      <div class="link-head"><span class="pip" aria-hidden="true"></span>Canvas page</div>
-      <div class="link-value" id="link-canvas-value">running</div>
-    </div>
-    <div class="wire" id="wire-relay" data-on="0" aria-hidden="true"></div>
-    <div class="link" id="link-relay" data-on="0">
-      <div class="link-head"><span class="pip" aria-hidden="true"></span>Extension</div>
-      <div class="link-value" id="link-relay-value">not connected</div>
-    </div>
-    <div class="wire" id="wire-host" data-on="0" aria-hidden="true"></div>
-    <div class="link" id="link-host" data-on="0">
-      <div class="link-head"><span class="pip" aria-hidden="true"></span>Native host</div>
-      <div class="link-value" id="link-host-value">unknown</div>
-    </div>
+  <section class="stats" aria-label="Session totals">
+    <div class="stat"><b id="s-requests">0</b> requests</div>
+    <div class="stat"><b id="s-answered">0</b> answered</div>
+    <div class="stat" id="s-failed-wrap"><b id="s-failed">0</b> failed</div>
+    <div class="stat"><b id="s-median">—</b> median</div>
+    <div class="stat"><b id="s-in">0</b> in</div>
+    <div class="stat"><b id="s-out">0</b> out</div>
+    <div class="stat"><b id="s-total">0</b> total</div>
   </section>
 
-  <p class="keyline" id="keyline"></p>
-  <p class="boot-error" id="boot-error" hidden></p>
+  <div class="log-head">
+    <span id="log-count">No requests yet</span>
+    <button type="button" id="clear">Clear</button>
+  </div>
 
-  <section class="metrics" aria-label="Session metrics">
-    <div class="metric">
-      <div class="metric-value" id="m-requests">0</div>
-      <div class="metric-label">Requests</div>
-    </div>
-    <div class="metric">
-      <div class="metric-value" id="m-ok">0</div>
-      <div class="metric-label">Answered</div>
-    </div>
-    <div class="metric">
-      <div class="metric-value" id="m-errors">0</div>
-      <div class="metric-label">Failed</div>
-    </div>
-    <div class="metric">
-      <div class="metric-value is-dim" id="m-median">—</div>
-      <div class="metric-label">Median</div>
-    </div>
-    <div class="metric">
-      <div class="metric-value is-dim" id="m-tokens">—</div>
-      <div class="metric-label">Tokens</div>
-    </div>
-  </section>
-
-  <section class="panel">
-    <div class="panel-head">
-      <span class="panel-title">Activity</span>
-      <div class="panel-actions">
-        <span class="count" id="log-count">0</span>
-        <button class="ghost" id="clear" type="button">Clear</button>
-      </div>
-    </div>
-    <div class="log" id="log">
-      <div class="empty" id="empty">
-        <strong>No requests yet</strong>
-        Point a client at <code id="empty-endpoint">http://127.0.0.1:8765/v1</code>
-      </div>
-    </div>
-  </section>
-
-  <footer class="foot">
-    <span>MessageChannel bridge · no WebSocket · no local network request</span>
-    <a href="https://github.com/pranrichh/gemini-canvas-proxy" target="_blank" rel="noreferrer">source</a>
-  </footer>
+  <section class="rows" id="rows"></section>
 </main>
 
 <script>
-// Registered in its own script tag, ahead of the application, so a parse or
-// load error in the main script is still reported. Canvas transforms this page
-// before serving it; a bad transform can leave a reference that throws on load,
-// and without this the page simply never connects and says nothing.
+const apiKey = "";
+
+// Canvas transforms this page before serving it, and a bad transform throws
+// while the rest of the file is still loading. Without this the page looks
+// intact and simply never connects, which is indistinguishable from a broken
+// relay.
 window.addEventListener('error', function (event) {
-  var box = document.getElementById('boot-error');
-  if (!box) return;
-  box.hidden = false;
+  const panel = document.querySelector('.panel');
+  if (!panel || document.getElementById('boot-error')) return;
+  const box = document.createElement('div');
+  box.id = 'boot-error';
+  box.className = 'boot-error';
   box.textContent = 'Script error: ' + (event.message || 'unknown')
     + (event.lineno ? ' (line ' + event.lineno + ')' : '');
+  panel.appendChild(box);
 });
-</script>
-<script>
-// ═══════════════════════════════════════════════════════════════
-// CANVAS AUTO-INJECT — Canvas replaces the empty string with
-// the real API key at compile time. DO NOT modify this line.
-// ═══════════════════════════════════════════════════════════════
-const apiKey = "";
 
 const API_ORIGIN = 'https://generativelanguage.googleapis.com';
 const API_PATH = /^\/v1beta\/models\/([A-Za-z0-9._-]+):(generateContent|streamGenerateContent)$/;
-const PING_INTERVAL_MS = 5000;
-const MISSED_PINGS_BEFORE_OFFLINE = 3;
-const HANDSHAKE_RETRY_MS = 1500;
-const MAX_LOG_ROWS = 200;
+const PING_MS = 5000;
+const MISSED_BEFORE_OFFLINE = 3;
+const RETRY_MS = 1500;
+const MAX_ROWS = 100;
 
 const FINISH_REASONS = {
-  STOP: 'stop',
-  MAX_TOKENS: 'length',
-  SAFETY: 'content_filter',
-  RECITATION: 'content_filter',
-  BLOCKLIST: 'content_filter',
-  PROHIBITED_CONTENT: 'content_filter',
-  SPII: 'content_filter',
-  IMAGE_SAFETY: 'content_filter',
-  LANGUAGE: 'content_filter'
+  STOP: 'stop', MAX_TOKENS: 'length',
+  SAFETY: 'content_filter', RECITATION: 'content_filter', BLOCKLIST: 'content_filter',
+  PROHIBITED_CONTENT: 'content_filter', SPII: 'content_filter',
+  IMAGE_SAFETY: 'content_filter', LANGUAGE: 'content_filter'
 };
 
-const el = (id) => document.getElementById(id);
-const nodes = {
-  summary: el('summary'),
-  summaryTitle: el('summary-title'),
-  summaryNote: el('summary-note'),
-  linkCanvas: el('link-canvas'),
-  linkCanvasValue: el('link-canvas-value'),
-  linkRelay: el('link-relay'),
-  linkRelayValue: el('link-relay-value'),
-  linkHost: el('link-host'),
-  linkHostValue: el('link-host-value'),
-  wireRelay: el('wire-relay'),
-  wireHost: el('wire-host'),
-  requests: el('m-requests'),
-  ok: el('m-ok'),
-  errors: el('m-errors'),
-  median: el('m-median'),
-  tokens: el('m-tokens'),
-  log: el('log'),
-  logCount: el('log-count'),
-  empty: el('empty'),
-  clear: el('clear')
-};
-
-// ── session state ──────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
 
 const state = {
   port: null,
   handshaked: false,
   nativeConnected: false,
   hostPort: 0,
-  protocol: 0,
   hostError: '',
+  protocol: 0,
   pingSeq: 0,
-  missedPongs: 0,
-  stats: { requests: 0, ok: 0, errors: 0, tokens: 0 },
-  durations: [],
-  rows: 0
+  missed: 0,
+  rows: [],
+  stats: { requests: 0, answered: 0, failed: 0, inbound: 0, outbound: 0, total: 0 },
+  durations: []
 };
 
-// ── formatting ─────────────────────────────────────────────────────────────
-
-// Did Canvas actually substitute a key into the source it served us? The text
-// of our own inline script answers that; the variable answers whether the
-// substitution reached the running scope. They can disagree, and which one
-// disagrees decides the fix.
-function sourceHasInjectedKey() {
-  const scripts = Array.prototype.slice.call(document.querySelectorAll('script:not([src])'));
-  return scripts.some(function (script) {
-    return /apiKey\s*=\s*["'][^"']{20,}["']/.test(script.textContent || '');
-  });
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-  ));
-}
+/* ── formatting ─────────────────────────────────────────────────────────── */
 
 function clock(date) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  const pad = (n) => (n < 10 ? '0' : '') + n;
+  return pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
 }
 
 function duration(ms) {
-  if (!Number.isFinite(ms)) return '—';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)}s`;
+  if (!isFinite(ms)) return '—';
+  return ms < 1000 ? Math.round(ms) + 'ms' : (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + 's';
 }
 
-function compactNumber(n) {
+function compact(n) {
   if (!n) return '0';
   if (n < 1000) return String(n);
-  return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+  return (n / 1000).toFixed(n < 10000 ? 1 : 0) + 'k';
 }
 
 function median(values) {
   if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = values.slice().sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-// ── rendering ──────────────────────────────────────────────────────────────
+function endpointUrl() {
+  return 'http://127.0.0.1:' + (state.hostPort || 8765) + '/v1';
+}
 
-function setLink(node, valueNode, on, text) {
+/* ── render ─────────────────────────────────────────────────────────────── */
+
+function setNode(node, valueNode, on, text) {
   node.dataset.on = on ? '1' : '0';
   valueNode.textContent = text;
 }
 
-function renderSummary() {
-  const relay = state.handshaked;
-  const host = state.nativeConnected;
+function renderStatus() {
+  $('endpoint').textContent = endpointUrl();
 
-  let key = 'down';
-  let title = 'Not connected';
-  let note = '';
+  let word = 'Ready';
+  let note = 'Requests are being served.';
+  let key = 'ready';
 
-  if (!relay) {
-    key = 'connecting';
-    title = 'Waiting for the extension';
-    note = 'The relay has not answered yet. Is the extension installed and enabled?';
-  } else if (host) {
-    key = 'ok';
-    title = 'Ready';
-    note = state.hostPort
-      ? 'Requests to <code>http://127.0.0.1:' + state.hostPort + '/v1</code> are being served.'
-      : 'Requests are being served.';
-  } else {
+  if (!state.handshaked) {
     key = 'degraded';
-    title = 'Extension connected, native host offline';
-    note = state.hostError
-      ? 'Chrome said: <code>' + escapeHtml(state.hostError) + '</code>'
-      : 'The page and the extension are talking, but the Python host is not running. '
-        + 'Install it with <code>./setup.sh</code> and reload the extension.';
+    word = 'Waiting for the extension';
+    note = 'The relay has not answered. Check that the extension is loaded and enabled.';
+  } else if (!state.nativeConnected) {
+    key = 'down';
+    word = 'Native host offline';
+    note = state.hostError || 'Run ./setup.sh, then reload the extension.';
   }
 
-  nodes.summary.dataset.state = key;
-  nodes.summaryTitle.textContent = title;
-  nodes.summaryNote.innerHTML = note;
+  $('state').dataset.state = key;
+  $('state-word').textContent = word;
+  $('state-note').textContent = note;
 
-  setLink(nodes.linkCanvas, nodes.linkCanvasValue, true, 'running');
-  setLink(nodes.linkRelay, nodes.linkRelayValue, relay, relay ? 'relaying' : 'not connected');
-  setLink(
-    nodes.linkHost,
-    nodes.linkHostValue,
-    host,
-    host ? (state.hostPort ? 'port ' + state.hostPort : 'connected') : (relay ? 'offline' : 'unknown')
-  );
-  nodes.wireRelay.dataset.on = relay ? '1' : '0';
-  nodes.wireHost.dataset.on = host ? '1' : '0';
+  setNode($('n-canvas'), $('v-canvas'), true, 'running');
+  setNode($('n-relay'), $('v-relay'), state.handshaked, state.handshaked ? 'relaying' : 'waiting');
+  setNode($('n-host'), $('v-host'), state.nativeConnected, state.nativeConnected ? 'connected' : 'offline');
 
-  const endpoint = state.hostPort ? 'http://127.0.0.1:' + state.hostPort + '/v1' : 'http://127.0.0.1:8765/v1';
-  // The empty state is removed from the DOM once the first request arrives, so
-  // this element is gone by the second render. Writing to it without a guard
-  // threw on every update after the first request.
-  const endpointNode = el('empty-endpoint');
-  if (endpointNode) endpointNode.textContent = endpoint;
+  const relayWire = $('w-relay');
+  relayWire.dataset.on = state.handshaked ? '1' : '0';
+  relayWire.dataset.pending = state.handshaked ? '0' : '1';
 
-  // Canvas substitutes a key into the declaration above at build time. If it
-  // did not, every request fails with a 401 that looks like an expiry, so say
-  // so plainly and say it before the first request. Note: this file must
-  // contain the declaration exactly once — anything that repeats it verbatim
-  // makes the substitution ambiguous and Canvas declines to make it.
-  const keyLine = el('keyline');
-  if (apiKey) {
-    keyLine.dataset.state = 'ok';
-    keyLine.textContent = 'Credentials: key in page (' + apiKey.length + ' characters)';
-  } else {
-    keyLine.dataset.state = 'ok';
-    keyLine.textContent = 'Credentials: supplied by Canvas at request time';
-  }
+  const hostWire = $('w-host');
+  hostWire.dataset.on = state.nativeConnected ? '1' : '0';
+  hostWire.dataset.pending = '0';
 }
 
-function renderMetrics() {
-  nodes.requests.textContent = String(state.stats.requests);
-  nodes.ok.textContent = String(state.stats.ok);
-  nodes.errors.textContent = String(state.stats.errors);
-  nodes.errors.classList.toggle('is-bad', state.stats.errors > 0);
+function renderStats() {
+  $('s-requests').textContent = String(state.stats.requests);
+  $('s-answered').textContent = String(state.stats.answered);
+  $('s-failed').textContent = String(state.stats.failed);
+  $('s-failed-wrap').classList.toggle('is-bad', state.stats.failed > 0);
 
   const med = median(state.durations);
-  nodes.median.textContent = med === null ? '—' : duration(med);
+  $('s-median').textContent = med === null ? '—' : duration(med);
 
-  nodes.tokens.textContent = state.stats.tokens ? compactNumber(state.stats.tokens) : '—';
-  nodes.logCount.textContent = state.rows === 1 ? '1 entry' : state.rows + ' entries';
+  $('s-in').textContent = compact(state.stats.inbound);
+  $('s-out').textContent = compact(state.stats.outbound);
+  $('s-total').textContent = compact(state.stats.total);
+
+  // The empty state already says there is nothing here; repeating it in the
+  // header read as two different kinds of nothing.
+  $('log-count').textContent = state.rows.length
+    ? state.rows.length + (state.rows.length === 1 ? ' request' : ' requests')
+    : '';
+  $('clear').hidden = !state.rows.length;
 }
 
-function addRow({ ok, verb, what, ms, code, detail }) {
-  if (nodes.empty && nodes.empty.parentNode) nodes.empty.remove();
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
 
-  const row = document.createElement('div');
-  row.className = 'row' + (ok ? '' : ' is-error');
+function buildRow(entry) {
+  const row = el('div', 'row' + (entry.ok ? '' : ' is-error'));
+  row.dataset.open = '0';
 
-  const time = document.createElement('span');
-  time.className = 't';
-  time.textContent = clock(new Date());
+  const toggle = el('button', 'row-toggle');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', 'false');
 
-  const verbEl = document.createElement('span');
-  verbEl.className = 'verb';
-  verbEl.textContent = verb;
+  toggle.appendChild(el('span', 'c-time', entry.time));
+  toggle.appendChild(el('span', 'c-model', entry.model));
+  toggle.appendChild(el('span', 'c-code ' + (entry.ok ? 'ok' : 'bad'),
+    entry.code ? String(entry.code) : '—'));
+  toggle.appendChild(el('span', 'c-ms', entry.ms === null ? '' : duration(entry.ms)));
+  toggle.appendChild(el('span', 'c-tok', entry.usage ? compact(entry.usage.total_tokens) : ''));
+  toggle.appendChild(el('span', 'c-open', '▾'));
 
-  const whatEl = document.createElement('span');
-  whatEl.className = 'what';
-  whatEl.textContent = what;
+  const detail = el('div', 'detail');
+  const dl = el('dl');
 
-  const msEl = document.createElement('span');
-  msEl.className = 'ms';
-  msEl.textContent = ms === null ? '' : duration(ms);
+  const addRow = (term, value) => {
+    dl.appendChild(el('dt', null, term));
+    dl.appendChild(el('dd', null, value));
+  };
 
-  const codeEl = document.createElement('span');
-  codeEl.className = 'code ' + (ok ? 'ok' : code >= 500 ? 'bad' : 'mid');
-  codeEl.textContent = code ? String(code) : '—';
+  addRow('request', entry.method + ' ' + entry.path);
+  if (entry.usage) {
+    addRow('usage', entry.usage.prompt_tokens + ' in · '
+      + entry.usage.completion_tokens + ' out · '
+      + entry.usage.total_tokens + ' total');
+  }
+  if (entry.finish) addRow('finish', entry.finish);
+  if (entry.error) addRow('error', entry.error);
 
-  row.append(time, verbEl, whatEl, msEl, codeEl);
+  if (entry.audio) {
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.preload = 'metadata';
+    audio.src = 'data:' + entry.audio.mime_type + ';base64,' + entry.audio.data;
+    dl.appendChild(audio);
 
-  if (detail) {
-    const detailEl = document.createElement('pre');
-    detailEl.className = 'detail';
-    detailEl.textContent = detail;
-    row.append(detailEl);
+    // Browsers report 0:00 until metadata loads, and a speech clip in a panel
+    // is small enough that knowing its length up front saves a play. 24 kHz
+    // mono 16-bit is fixed for these models, so the byte count is the duration.
+    if (entry.audio.seconds) {
+      const caption = el('div', 'audio-length', entry.audio.seconds.toFixed(1) + ' s of speech');
+      dl.appendChild(caption);
+    }
   }
 
-  nodes.log.append(row);
-  state.rows += 1;
-
-  while (nodes.log.children.length > MAX_LOG_ROWS) {
-    nodes.log.removeChild(nodes.log.firstChild);
-    state.rows -= 1;
+  if (entry.body) {
+    const more = document.createElement('details');
+    more.className = 'more';
+    const summary = document.createElement('summary');
+    summary.textContent = 'request body';
+    more.appendChild(summary);
+    more.appendChild(el('pre', null, entry.body));
+    dl.appendChild(more);
   }
 
-  nodes.log.scrollTop = nodes.log.scrollHeight;
-  renderMetrics();
+  detail.appendChild(dl);
+
+  toggle.addEventListener('click', () => {
+    const wasOpen = row.dataset.open === '1';
+    for (const other of document.querySelectorAll('.row[data-open="1"]')) {
+      other.dataset.open = '0';
+      other.querySelector('.row-toggle').setAttribute('aria-expanded', 'false');
+      other.querySelector('.c-open').textContent = '▾';
+    }
+    row.dataset.open = wasOpen ? '0' : '1';
+    toggle.setAttribute('aria-expanded', String(!wasOpen));
+    row.querySelector('.c-open').textContent = wasOpen ? '▾' : '▴';
+  });
+
+  row.appendChild(toggle);
+  row.appendChild(detail);
+  return row;
 }
 
-// ── request handling ───────────────────────────────────────────────────────
+function renderRows() {
+  const host = $('rows');
+  host.textContent = '';
 
-function fail(id, message, detail) {
-  state.stats.errors += 1;
-  addRow({ ok: false, verb: 'ERR', what: message, ms: null, code: 0, detail: detail || null });
-  post({ source: 'gemini-proxy-response', id, error: message });
+  if (!state.rows.length) {
+    const empty = el('div', 'empty');
+    empty.appendChild(el('div', null, 'No requests yet'));
+    const hint = el('div', null, 'Requests will appear here. Point a client at ');
+    hint.appendChild(el('code', null, endpointUrl()));
+    empty.appendChild(hint);
+    host.appendChild(empty);
+    return;
+  }
+
+  for (const entry of state.rows) host.appendChild(buildRow(entry));
 }
+
+/* ── request handling ───────────────────────────────────────────────────── */
 
 function post(message) {
   if (!state.port) return;
-  try {
-    state.port.postMessage(message);
-  } catch (error) {
-    console.error('[proxy] port closed', error);
-  }
+  try { state.port.postMessage(message); } catch (error) { /* port closed */ }
+}
+
+function reply(id, payload) {
+  post({ source: 'gemini-proxy-response', id: id, status: payload.status,
+         data: payload.data, error: payload.error });
+}
+
+function streamEvent(id, payload) {
+  payload.source = 'gemini-proxy-stream';
+  payload.id = id;
+  post(payload);
 }
 
 function buildUrl(path, stream) {
@@ -762,172 +663,208 @@ function buildUrl(path, stream) {
   if (url.protocol !== 'https:' || url.hostname !== 'generativelanguage.googleapis.com') {
     throw new Error('refusing to call a non-Gemini destination');
   }
-  // The key is optional. When Canvas substitutes one into the declaration above
-  // we use it; when it does not, the request goes out without a key and Canvas
-  // authenticates it at its own boundary. Treating an empty key as an error
-  // breaks the normal case.
+  // The key is optional. Canvas authenticates the request at its own boundary;
+  // a key only appears here when Canvas substituted one into the declaration.
   if (apiKey) url.searchParams.set('key', apiKey);
   if (stream) url.searchParams.set('alt', 'sse');
   return url.toString();
 }
 
-function extractParts(event, onText, onToolCall, onImage) {
-  const candidates = event.candidates || [];
-  if (!candidates.length) {
-    const feedback = event.promptFeedback || {};
-    if (feedback.blockReason) {
-      throw new Error('Gemini blocked the prompt (' + feedback.blockReason + ')');
-    }
-    return null;
-  }
-  const candidate = candidates[0];
-  const parts = (candidate.content && candidate.content.parts) || [];
-
-  for (const part of parts) {
-    if (typeof part.text === 'string' && part.text && !part.thought) onText(part.text);
-    else if (part.functionCall) onToolCall(part.functionCall);
-    else if (part.inlineData) onImage(part.inlineData);
-  }
-  return candidate;
+function modelFromPath(path) {
+  const match = API_PATH.exec(path);
+  return match ? match[1] : 'unknown';
 }
 
-function usageOf(event) {
-  const meta = event.usageMetadata || {};
+function usageOf(payload) {
+  const meta = (payload && payload.usageMetadata) || {};
   const prompt = meta.promptTokenCount || 0;
   const completion = meta.candidatesTokenCount || 0;
-  const total = meta.totalTokenCount || prompt + completion;
-  if (!total) return null;
-  return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: total };
+  const total = meta.totalTokenCount || (prompt + completion);
+  return total ? { prompt_tokens: prompt, completion_tokens: completion, total_tokens: total } : null;
 }
 
-async function handleBuffered(id, path, body, started) {
-  const response = await fetch(buildUrl(path, false), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
+function record(entry) {
+  state.rows.push(entry);
+  if (state.rows.length > MAX_ROWS) state.rows.shift();
 
-  const text = await response.text();
-  let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text.slice(0, 400) }; }
+  if (entry.ok) {
+    state.stats.answered += 1;
+    if (entry.ms !== null) state.durations.push(entry.ms);
+  } else {
+    state.stats.failed += 1;
+  }
 
-  const elapsed = performance.now() - started;
-  const usage = usageOf(data);
+  if (entry.usage) {
+    state.stats.inbound += entry.usage.prompt_tokens;
+    state.stats.outbound += entry.usage.completion_tokens;
+    state.stats.total += entry.usage.total_tokens;
+  }
 
-  if (!response.ok) {
-    const message = (data.error && data.error.message) || 'Gemini returned ' + response.status;
-    state.stats.errors += 1;
-    addRow({ ok: false, verb: 'POST', what: message, ms: elapsed, code: response.status,
-             detail: JSON.stringify(data, null, 1).slice(0, 800) });
-    post({ source: 'gemini-proxy-response', id, status: response.status, data, error: message });
+  renderRows();
+  renderStats();
+}
+
+function handleRequest(message) {
+  const id = message.id;
+  const path = message.path;
+  const stream = Boolean(message.stream);
+  const started = performance.now();
+  const time = clock(new Date());
+
+  // /diag asks this page what it can see. The page is the only part of the
+  // chain the host cannot inspect, and "the relay is down" and "the page is
+  // not running" look identical from outside.
+  if (path === '/diag') {
+    reply(id, {
+      status: 200,
+      data: {
+        api_key_length: apiKey ? apiKey.length : 0,
+        handshaked: state.handshaked,
+        protocol: state.protocol,
+        host_port_known: state.hostPort,
+        ready_state: document.readyState
+      },
+      error: null
+    });
     return;
   }
 
-  const candidate = ((data.candidates && data.candidates[0]) || {});
-  const finish = FINISH_REASONS[String(candidate.finishReason || 'STOP').toUpperCase()] || 'stop';
-  const tools = ((candidate.content && candidate.content.parts) || []).filter((p) => p.functionCall).length;
+  state.stats.requests += 1;
 
-  state.stats.ok += 1;
-  state.durations.push(elapsed);
-  if (usage) state.stats.tokens += usage.total_tokens;
-  addRow({ ok: true, verb: 'POST', what: (body.model || 'gemini') + (tools ? ' · ' + tools + ' tool call' + (tools > 1 ? 's' : '') : ''),
-           ms: elapsed, code: response.status });
-  post({ source: 'gemini-proxy-response', id, status: response.status, data, error: null });
+  if (typeof path !== 'string' || !API_PATH.test(path) || path.indexOf('..') !== -1) {
+    record({ time: time, model: 'unknown', ok: false, code: 0, ms: null,
+             method: message.method || 'POST', path: String(path),
+             error: 'rejected an unexpected API path', usage: null });
+    reply(id, { status: 400, error: 'rejected an unexpected API path' });
+    return;
+  }
+
+  const base = {
+    time: time, model: modelFromPath(path), method: message.method || 'POST', path: path,
+    body: message.body ? JSON.stringify(message.body, null, 1).slice(0, 2000) : undefined
+  };
+
+  if (stream) runStream(id, path, message.body, base, started);
+  else runBuffered(id, path, message.body, base, started);
 }
 
-async function handleStreaming(id, path, body, started) {
-  const response = await fetch(buildUrl(path, true), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
+async function runBuffered(id, path, body, base, started) {
+  try {
+    const response = await fetch(buildUrl(path, false), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
 
-  if (!response.ok) {
     const text = await response.text();
-    let parsed = {};
-    try { parsed = JSON.parse(text); } catch { parsed = {}; }
-    const message = (parsed.error && parsed.error.message) || 'Gemini returned ' + response.status;
-    state.stats.errors += 1;
-    addRow({ ok: false, verb: 'POST', what: message, ms: performance.now() - started,
-             code: response.status, detail: text.slice(0, 500) });
-    post({ source: 'gemini-proxy-stream', id, event: 'error', error: message });
-    return;
+    let payload = {};
+    try { payload = text ? JSON.parse(text) : {}; } catch (error) { payload = {}; }
+
+    const ms = performance.now() - started;
+
+    if (!response.ok) {
+      const detail = (payload.error && payload.error.message) || response.statusText || 'request failed';
+      record(Object.assign({}, base, { ok: false, code: response.status, ms: ms, error: detail, usage: null }));
+      reply(id, { status: response.status, data: payload, error: detail });
+      return;
+    }
+
+    const candidate = (payload.candidates && payload.candidates[0]) || {};
+    const parts = (candidate.content && candidate.content.parts) || [];
+    const speech = parts.filter((p) => p.inlineData
+      && String(p.inlineData.mimeType || '').indexOf('audio/') === 0)[0];
+
+    record(Object.assign({}, base, {
+      ok: true,
+      code: response.status,
+      ms: ms,
+      usage: usageOf(payload),
+      finish: FINISH_REASONS[String(candidate.finishReason || 'STOP').toUpperCase()] || 'stop',
+      audio: speech ? {
+        mime_type: 'audio/wav',
+        data: speech.inlineData.data,
+        seconds: Math.max(0, (speech.inlineData.data.length * 0.75 - 44) / 48000)
+      } : undefined
+    }));
+    reply(id, { status: response.status, data: payload, error: null });
+  } catch (error) {
+    const message = error.message || String(error);
+    record(Object.assign({}, base, { ok: false, code: 0, ms: performance.now() - started, error: message }));
+    reply(id, { status: 0, error: message });
   }
+}
 
-  if (!response.body) {
-    post({ source: 'gemini-proxy-stream', id, event: 'error', error: 'streaming is unavailable in this browser' });
-    return;
-  }
-
-  post({ source: 'gemini-proxy-stream', id, event: 'start' });
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let finishReason = 'stop';
+async function runStream(id, path, body, base, started) {
+  let finish = 'stop';
   let usage = null;
   let toolIndex = 0;
-  let sawContent = false;
-  let firstByteAt = null;
-
-  const onText = (text) => {
-    sawContent = true;
-    if (firstByteAt === null) firstByteAt = performance.now() - started;
-    post({ source: 'gemini-proxy-stream', id, event: 'delta', text });
-  };
-
-  const onToolCall = (call) => {
-    sawContent = true;
-    post({
-      source: 'gemini-proxy-stream',
-      id,
-      event: 'tool_call',
-      tool_call: {
-        index: toolIndex++,
-        id: 'call_' + Math.random().toString(16).slice(2, 10),
-        name: call.name || '',
-        arguments: JSON.stringify(call.args || {})
-      }
-    });
-    finishReason = 'tool_calls';
-  };
-
-  const onImage = (inline) => {
-    sawContent = true;
-    post({
-      source: 'gemini-proxy-stream',
-      id,
-      event: 'delta',
-      text: '\n![generated_image](data:' + (inline.mimeType || 'image/png') + ';base64,' + inline.data + ')\n'
-    });
-  };
-
-  const consume = (block) => {
-    for (const line of block.split('\n')) {
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === '[DONE]') continue;
-
-      let event;
-      try { event = JSON.parse(payload); } catch { continue; }
-
-      if (event.error) throw new Error(event.error.message || 'Gemini stream error');
-
-      const candidate = extractParts(event, onText, onToolCall, onImage);
-      if (candidate && candidate.finishReason) {
-        finishReason = FINISH_REASONS[String(candidate.finishReason).toUpperCase()] || 'stop';
-      }
-      const u = usageOf(event);
-      if (u) usage = u;
-    }
-  };
 
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+    const response = await fetch(buildUrl(path, true), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
 
+    if (!response.ok || !response.body) {
+      const raw = await response.text().catch(() => '');
+      let detail = response.statusText || 'stream failed';
+      try { detail = JSON.parse(raw).error.message || detail; } catch (error) { /* keep status text */ }
+      record(Object.assign({}, base, { ok: false, code: response.status,
+        ms: performance.now() - started, error: detail }));
+      streamEvent(id, { event: 'error', error: detail });
+      return;
+    }
+
+    streamEvent(id, { event: 'start' });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const consume = (block) => {
+      for (const line of block.split('\n')) {
+        if (line.indexOf('data:') !== 0) continue;
+        const raw = line.slice(5).trim();
+        if (!raw || raw === '[DONE]') continue;
+
+        let event;
+        try { event = JSON.parse(raw); } catch (error) { continue; }
+        if (event.error) throw new Error(event.error.message || 'stream error');
+        if (event.promptFeedback && event.promptFeedback.blockReason) {
+          throw new Error('Gemini blocked the prompt (' + event.promptFeedback.blockReason + ')');
+        }
+
+        const candidate = (event.candidates && event.candidates[0]) || {};
+        for (const part of ((candidate.content && candidate.content.parts) || [])) {
+          if (typeof part.text === 'string' && part.text && !part.thought) {
+            streamEvent(id, { event: 'delta', text: part.text });
+          } else if (part.functionCall) {
+            streamEvent(id, {
+              event: 'tool_call',
+              tool_call: {
+                index: toolIndex++,
+                id: 'call_' + Math.random().toString(16).slice(2, 10),
+                name: part.functionCall.name || '',
+                arguments: JSON.stringify(part.functionCall.args || {})
+              }
+            });
+            finish = 'tool_calls';
+          }
+        }
+
+        if (candidate.finishReason) {
+          finish = FINISH_REASONS[String(candidate.finishReason).toUpperCase()] || 'stop';
+        }
+        const u = usageOf(event);
+        if (u) usage = u;
+      }
+    };
+
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
       let split;
       while ((split = buffer.indexOf('\n\n')) >= 0) {
         consume(buffer.slice(0, split));
@@ -936,87 +873,34 @@ async function handleStreaming(id, path, body, started) {
     }
     if (buffer.trim()) consume(buffer);
   } catch (error) {
-    state.stats.errors += 1;
-    addRow({ ok: false, verb: 'POST', what: error.message, ms: performance.now() - started, code: 0 });
-    post({ source: 'gemini-proxy-stream', id, event: 'error', error: error.message });
+    const message = error.message || String(error);
+    record(Object.assign({}, base, { ok: false, code: 0, ms: performance.now() - started, error: message }));
+    streamEvent(id, { event: 'error', error: message });
     return;
   }
 
-  const elapsed = performance.now() - started;
-  state.stats.ok += 1;
-  state.durations.push(elapsed);
-  if (usage) state.stats.tokens += usage.total_tokens;
-
-  addRow({
-    ok: true,
-    verb: 'POST',
-    what: (body.model || 'gemini') + ' · streamed' + (finishReason === 'tool_calls' ? ' · tool call' : ''),
-    ms: elapsed,
-    code: 200
-  });
-
-  post({
-    source: 'gemini-proxy-stream',
-    id,
-    event: 'end',
-    finish_reason: sawContent ? finishReason : 'stop',
-    usage
-  });
+  record(Object.assign({}, base, {
+    ok: true, code: 200, ms: performance.now() - started, usage: usage, finish: finish
+  }));
+  streamEvent(id, { event: 'end', finish_reason: finish, usage: usage });
 }
 
-async function handleRequest(message) {
-  const { id, path, body, stream } = message;
-  const started = performance.now();
+/* ── transport ──────────────────────────────────────────────────────────── */
 
-  // /diag: report this page's own view of the world. The page is the only part
-  // of the chain that cannot be inspected from the host, so it answers for
-  // itself instead of making someone open a devtools console.
-  if (path === '/diag') {
-    post({
-      source: 'gemini-proxy-response',
-      id,
-      status: 200,
-      data: {
-        api_key_length: apiKey ? apiKey.length : 0,
-        source_rewritten: sourceHasInjectedKey(),
-        sees_native_host_port: state.hostPort || 0,
-        handshaked: state.handshaked,
-        protocol: state.protocol,
-        href: location.href,
-        ready_state: document.readyState,
-        script_count: document.querySelectorAll('script:not([src])').length
-      },
-      error: null
-    });
-    return;
-  }
-
-  state.stats.requests += 1;
-  renderMetrics();
-
-  if (typeof path !== 'string' || !API_PATH.test(path) || path.includes('..')) {
-    fail(id, 'Rejected an unexpected API path', path);
-    return;
-  }
-
-  try {
-    if (stream) await handleStreaming(id, path, body, started);
-    else await handleBuffered(id, path, body, started);
-  } catch (error) {
-    state.stats.errors += 1;
-    addRow({ ok: false, verb: 'POST', what: error.message, ms: performance.now() - started, code: 0 });
-    post({
-      source: stream ? 'gemini-proxy-stream' : 'gemini-proxy-response',
-      id,
-      event: stream ? 'error' : undefined,
-      error: error.message
-    });
-  }
+// Canvas can render the preview more than once — a visible instance and an
+// offscreen one. Both would hand a port to the same relay, and the relay keeps
+// only the newest, so the two take turns stealing it and the panel goes stale
+// at random. Only the instance that is actually laid out may claim the port.
+function isDisplayed() {
+  return window.innerWidth > 50 && window.innerHeight > 50;
 }
-
-// ── transport ──────────────────────────────────────────────────────────────
 
 function handshake() {
+  if (!isDisplayed()) {
+    setTimeout(handshake, RETRY_MS);
+    return;
+  }
+
   const channel = new MessageChannel();
 
   channel.port1.onmessage = (event) => {
@@ -1025,64 +909,46 @@ function handshake() {
     if (data.source === 'gemini-proxy-ack') {
       state.handshaked = true;
       state.nativeConnected = Boolean(data.nativeConnected);
-      state.hostPort = data.port || 0;
+      state.hostPort = data.port || state.hostPort;
       state.protocol = data.protocol || 0;
       state.hostError = data.error || '';
-      state.missedPongs = 0;
-      renderSummary();
-
-      if (state.protocol && state.protocol !== 2) {
-        addRow({
-          ok: false,
-          verb: 'WARN',
-          what: 'protocol mismatch: host speaks v' + state.protocol,
-          ms: null,
-          code: 0,
-          detail: 'Reload the extension and restart the host so both sides speak v2.'
-        });
-      }
+      state.missed = 0;
+      renderStatus();
       return;
     }
 
     if (data.source === 'gemini-proxy-pong') {
-      state.missedPongs = 0;
+      state.missed = 0;
       state.nativeConnected = Boolean(data.nativeConnected);
       state.hostPort = data.port || state.hostPort;
       state.hostError = data.error || '';
       if (!state.handshaked) state.handshaked = true;
-      renderSummary();
+      renderStatus();
       return;
     }
 
     if (data.source === 'gemini-proxy-state') {
       state.nativeConnected = Boolean(data.connected);
-      renderSummary();
+      renderStatus();
       return;
     }
 
-    if (data.source === 'gemini-proxy-request') {
-      handleRequest(data);
-    }
+    if (data.source === 'gemini-proxy-request') handleRequest(data);
   };
 
   channel.port1.start();
   state.port = channel.port1;
 
-  // Address the top document, not the immediate parent. Canvas does not always
-  // put the preview one level down: it can sit inside an intermediate sandbox
-  // frame, and that frame has no relay to receive the port. `window.top` is the
-  // Gemini page in every layout, and postMessage crosses origins freely.
-  //
+  // Address the top document. Canvas can nest the preview inside an
+  // intermediate sandbox frame, and that frame has no relay to receive a port.
   // A sandboxed frame cannot read its target's origin, so `*` is the only
-  // usable targetOrigin. The receiving side provides the security: it accepts
-  // the port only from a frame on Google's usercontent origin, an opaque-origin
-  // frame, or a direct child of the page.
+  // usable targetOrigin; the receiving side enforces the policy.
   const host = window.top || window.parent;
   host.postMessage({ source: 'gemini-proxy-ready' }, '*', [channel.port2]);
 
-  state.retryTimer = setTimeout(() => {
+  setTimeout(() => {
     if (!state.handshaked) handshake();
-  }, HANDSHAKE_RETRY_MS);
+  }, RETRY_MS);
 }
 
 function startHeartbeat() {
@@ -1092,48 +958,36 @@ function startHeartbeat() {
     post({ source: 'gemini-proxy-ping', seq: state.pingSeq });
 
     if (!state.handshaked) return;
-    state.missedPongs += 1;
-    if (state.missedPongs >= MISSED_PINGS_BEFORE_OFFLINE) {
-      // Three silent pings means the relay is gone, whatever the last ack said.
-      // The content script's world can be torn down and re-injected — an
-      // extension reload, a host restart — and when that happens the port we
-      // hold is dead. Demoting without re-handshaking would leave the page
-      // permanently offline until someone reloaded the tab by hand.
+    state.missed += 1;
+
+    if (state.missed >= MISSED_BEFORE_OFFLINE) {
+      // Silence means the relay is gone: an extension reload or a recycled
+      // service worker tears down the world holding the port. Demote and try
+      // again, or the page stays dead until someone reloads the tab.
       state.handshaked = false;
       state.nativeConnected = false;
       state.port = null;
-      state.missedPongs = 0;
-      renderSummary();
+      state.missed = 0;
+      renderStatus();
       handshake();
     }
-  }, PING_INTERVAL_MS);
+  }, PING_MS);
 }
 
-nodes.clear.addEventListener('click', () => {
-  nodes.log.textContent = '';
-  const empty = document.createElement('div');
-  empty.className = 'empty';
-  empty.innerHTML = '<strong>No requests yet</strong> Point a client at <code>'
-    + (state.hostPort ? 'http://127.0.0.1:' + state.hostPort + '/v1' : 'http://127.0.0.1:8765/v1')
-    + '</code>';
-  nodes.log.append(empty);
-  nodes.empty = empty;
-  state.rows = 0;
-  state.stats = { requests: 0, ok: 0, errors: 0, tokens: 0 };
+$('clear').addEventListener('click', () => {
+  state.rows = [];
   state.durations = [];
-  renderMetrics();
+  state.stats = { requests: 0, answered: 0, failed: 0, inbound: 0, outbound: 0, total: 0 };
+  renderRows();
+  renderStats();
 });
 
-// Transport first, rendering second, each step isolated. Canvas runs this
-// through its own bundler, and a build-time identifier rewrite can leave a
-// reference that throws on load — one such error previously aborted the whole
-// script, which meant the relay never bound and every request reported "not
-// connected" for what was really a rendering bug. Nothing in the UI is
-// important enough to take the transport down with it.
+// Transport first. A rendering fault must not stop the relay from binding.
 try { handshake(); } catch (error) { console.error('[proxy] handshake', error); }
 try { startHeartbeat(); } catch (error) { console.error('[proxy] heartbeat', error); }
-try { renderSummary(); } catch (error) { console.error('[proxy] summary', error); }
-try { renderMetrics(); } catch (error) { console.error('[proxy] metrics', error); }
+try { renderStatus(); } catch (error) { console.error('[proxy] status', error); }
+try { renderStats(); } catch (error) { console.error('[proxy] stats', error); }
+try { renderRows(); } catch (error) { console.error('[proxy] rows', error); }
 </script>
 </body>
 </html>

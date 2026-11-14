@@ -19,6 +19,7 @@ nothing here that deserves one.
 | `PROXY_ALLOW_URL_FETCH` | off | allow `http(s)` image URLs; see [security](security.md) |
 | `PROXY_MAX_IMAGE_BYTES` | `20971520` (20 MB) | ceiling for a fetched remote image |
 | `PROXY_ALLOWED_ORIGIN` | unset | the single origin allowed to make cross-origin requests |
+| `PROXY_LOG_FILE` | `native_host/.host.log` | where startup, shutdown and fatal errors are recorded |
 
 Notes on the ones people actually change.
 
@@ -37,6 +38,12 @@ that legitimately return long structured data.
 **`PROXY_MAX_REQUEST_BYTES`.** Two ceilings apply. This one is checked against
 `Content-Length` before the body is read. The chunk protocol independently caps
 at 128 × 600 KB = 76.8 MB, so setting this higher does not buy you more.
+
+**`PROXY_LOG_FILE`.** Chrome gives a native host a stderr pipe that nothing
+reads, so a host that dies on startup leaves no evidence anywhere — the only
+visible symptom is the browser restarting it forever. This file records each
+start, each exit, and the arguments the process was given. It is the first place
+to look when the connection is flapping.
 
 **`PROXY_ALLOWED_ORIGIN`.** The proxy does not emit CORS headers unless you name
 an origin, so browsers refuse to call it from a web page by default. Setting

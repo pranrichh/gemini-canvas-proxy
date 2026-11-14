@@ -1,17 +1,6 @@
-2026-11-14 11:29:45  pid=94535  exited with cannot listen on 127.0.0.1:8765 (Address already in use) — another process is probably already serving the proxy  argv=['chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/']  env_port=None
-2026-11-14 11:31:02  pid=95446  started on 127.0.0.1:44027 in http-only role, caller=<none>
-2026-11-14 11:31:03  pid=95454  started on 127.0.0.1:43663 in native role, caller=<none>
-2026-11-14 11:31:03  pid=95454  native port closed after 0.3s — Chrome ended the session
-2026-11-14 11:31:04  pid=95462  started on 127.0.0.1:50113 in http-only role, caller=<none>
-2026-11-14 11:34:21  pid=96895  started on 127.0.0.1:8765 in native role, caller=chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/
-2026-11-14 11:55:29  pid=101393  started on 127.0.0.1:8765 in native role, caller=chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/
-2026-11-14 11:57:23  pid=101789  started on 127.0.0.1:54561 in http-only role, caller=<none>
-2026-11-14 11:57:24  pid=101799  started on 127.0.0.1:40013 in native role, caller=<none>
-2026-11-14 11:57:24  pid=101799  native port closed after 0.3s — Chrome ended the session
-2026-11-14 11:57:25  pid=101809  started on 127.0.0.1:43403 in http-only role, caller=<none>
-2026-11-14 12:11:47  pid=101393  native port closed after 978.3s — Chrome ended the session
-2026-11-14 12:11:48  pid=104872  started on 127.0.0.1:8765 in native role, caller=chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/
-2026-11-14 12:20:53  pid=107829  started on 127.0.0.1:36251 in http-only role, caller=<none>
-2026-11-14 12:20:54  pid=107837  started on 127.0.0.1:59437 in native role, caller=<none>
-2026-11-14 12:20:55  pid=107837  native port closed after 0.3s — Chrome ended the session
-2026-11-14 12:20:55  pid=107847  started on 127.0.0.1:37507 in http-only role, caller=<none>
+2026-11-14 12:37:30  pid=111707  started on 127.0.0.1:8765 in native role, caller=chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/
+2026-11-14 12:40:46  pid=112502  started on 127.0.0.1:8765 in native role, caller=chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/
+2026-11-14 12:58:59  pid=115871  started on 127.0.0.1:54747 in http-only role, caller=<none>
+2026-11-14 12:59:00  pid=115879  started on 127.0.0.1:60687 in native role, caller=<none>
+2026-11-14 12:59:00  pid=115879  native port closed after 0.3s — Chrome ended the session
+2026-11-14 12:59:01  pid=115889  started on 127.0.0.1:39711 in http-only role, caller=<none>

@@ -119,6 +119,7 @@ Python and JavaScript SDKs, LangChain, LiteLLM, and Hermes.
 | Image input (`data:` URIs) | works |
 | Image input (`https://` URLs) | opt-in, `PROXY_ALLOW_URL_FETCH=true` |
 | Image generation | works, returned as a markdown data URL |
+| Speech generation (`-tts` models) | works, returned as a WAV in `message.audio` |
 | Structured output (`response_format: json_object` / `json_schema`) | works |
 | `n > 1`, `logprobs`, `top_logprobs` | ignored, with a warning on stderr |
 | `/v1/completions`, `/v1/embeddings` | not implemented |
@@ -172,7 +173,7 @@ docs/                    the documents above
 python3 -m unittest discover -s tests -v
 ```
 
-40+ tests, no third-party dependencies. They cover the translation layer, the
+50 tests, no third-party dependencies. They cover the translation layer, the
 HTTP surface, real streaming, error shapes, and chunk reassembly.
 
 ## Licence

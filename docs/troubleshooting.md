@@ -48,16 +48,27 @@ The extension ID in the manifest does not match the loaded extension. This
 happens when the extension is removed and re-added, because the ID changes.
 Re-run `setup.sh` with the new ID.
 
-## The page says "Canvas did not inject an API key"
+## "Credentials: supplied by Canvas at request time"
 
-Canvas rewrites the literal `const apiKey = "";` at compile time. If that line
-was edited, reformatted, or the page was pasted into a Canvas that is not using
-the HTML renderer, nothing is injected.
+That is the normal state, not a warning. The page sends its request without a
+`key` parameter and Canvas authenticates it at its own boundary. An empty
+`apiKey` is expected; the page only uses one when Canvas happens to substitute
+it into the declaration.
 
-Re-paste the current `canvas-proxy.html` without modifying it. When creating the
-Canvas, ask for **"Create an HTML web app"** — a plain React Canvas runs the code
-through esbuild, which fails on `<!DOCTYPE html>` with
-`Expected identifier but found "!"`.
+If you ever *do* see a 401 from the Gemini API, the cause is a session problem
+rather than a missing key: the Canvas tab expired, or the page was pasted into a
+Canvas that is not using the HTML renderer. Ask for **"Create an HTML web app"**
+when starting a Canvas — a plain React Canvas runs the page through esbuild,
+which fails on `<!DOCTYPE html>` with `Expected identifier but found "!"`.
+
+## The page says Ready but every request reports "not connected"
+
+Two different frames were answering. The content script runs in every frame
+(all_frames), and `chrome.tabs.sendMessage` delivers to all of them — first
+reply wins. Version 2 makes only the top frame answer when it has no relay, and
+accepts the Canvas frame from Google's usercontent origin, which is what a
+sandboxed preview actually reports. If you are seeing this, the extension is
+older than the page: reload it at `chrome://extensions` and reload the tab.
 
 ## 401 or 403 from the Gemini API
 
