@@ -1,7 +1,9 @@
-<h1 align="center">Gemini Canvas Proxy</h1>
+<p align="center">
+  <img src="assets/logo.svg" width="124" height="124" alt="Gemini Canvas Proxy">
+</p>
 
 <p align="center">
-  <img src="https://readme-typing-svg.demolab.com?font=Bitcount&size=25&duration=4000&pause=800&color=FFD700&background=1E40AF&center=true&vCenter=true&width=560&lines=%E2%9C%A6+Free+unlimited+Gemini+API+%E2%9C%A6;%E2%9C%A6+for+any+OpenAI-compatible+app+%E2%9C%A6" alt="typing animation" />
+  <img src="https://readme-typing-svg.demolab.com?font=Bitcount&size=25&duration=4000&pause=800&color=FFD700&background=1E40AF&center=true&vCenter=true&width=560&lines=%E2%9C%A6+Gemini+Canvas+Proxy+%E2%9C%A6;%E2%9C%A6+Free+unlimited+Gemini+API+%E2%9C%A6;%E2%9C%A6+for+any+OpenAI-compatible+app+%E2%9C%A6" alt="typing animation" />
 </p>
 
 Turns a free Gemini Canvas session into a local OpenAI-compatible endpoint at `http://127.0.0.1:8765/v1`. Point any OpenAI client at it, use the generated token as the API key.
@@ -31,7 +33,7 @@ Docker: `docker compose up -d --build`, then noVNC at `http://127.0.0.1:6080`.
 ## Features
 
 - Chat completions with tool calling, multimodal input, and image generation
-- Compatible with Hermes Agent, OpenClaw, LiteLLM, LangChain, the OpenAI SDK, curl
+- Compatible with Hermes Agent, OpenClaw, opencode, omp, the OpenAI SDK, curl
 - Bearer auth, loopback-only by default
 - Private MessageChannel bridge — no WebSocket, immune to Chrome's Local Network Access restrictions
 

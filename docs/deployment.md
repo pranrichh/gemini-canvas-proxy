@@ -147,9 +147,37 @@ docker compose -f docker-compose.yml -f docker-compose.shared.yml -f docker-comp
 
 ## Podman
 
-Rootless hosts use the quadlet unit in `gemini-canvas-proxy.container`.
-[docs/podman.md](podman.md) has the full walkthrough, including the VNC toggle
-for small VPS instances:
+Rootless hosts use the quadlet unit at `docker/gemini-canvas-proxy.container`.
+The image is the same one Docker builds.
+
+```bash
+podman build -t localhost/gemini-canvas-proxy:local .
+cp /etc/machine-id ./machine-id      # see below
+# adjust the Volume= paths in the unit, then:
+mkdir -p ~/.config/containers/systemd
+cp docker/gemini-canvas-proxy.container ~/.config/containers/systemd/
+systemctl --user daemon-reload
+systemctl --user start gemini-canvas-proxy.service
+```
+
+`machine-id` matters: Chromium derives part of its profile encryption from
+`/etc/machine-id`, and a container gets a fresh one on every start unless it is
+pinned. Copy it once or the login drops whenever the container is recreated.
+
+Manual run, if you would rather not use systemd:
+
+```bash
+podman run -d --name gemini-canvas-proxy \
+  -p 127.0.0.1:6080:6080 -p 127.0.0.1:8765:8765 \
+  -v gemini-canvas-proxy-data:/browser-data \
+  -v "$PWD":/app:ro,Z \
+  -v /etc/machine-id:/etc/machine-id:ro \
+  --shm-size=1g \
+  localhost/gemini-canvas-proxy:local
+```
+
+The VNC view can be switched off when nobody is watching; the browser keeps
+running either way.
 
 ```bash
 podman exec gemini-canvas-proxy /app/toggle-vnc.sh stop

@@ -14,7 +14,7 @@ import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "canvas-proxy.template.html"
-LOGO = ROOT / "logo.svg"
+LOGO = ROOT / "assets" / "logo.svg"
 BANNER = ROOT / "assets" / "banner.svg"
 OUT = ROOT / "canvas-proxy.html"
 
