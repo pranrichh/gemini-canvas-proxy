@@ -31,6 +31,14 @@ let hostPort = 0;
 let hostError = '';
 
 /**
+ * What happened to the most recent answer from the page: how big it was, whether
+ * the native port accepted it, and why not. Surfaced by /diagnostics, because a
+ * dropped response is otherwise invisible from every side at once — the page
+ * believes it replied, the host sees nothing.
+ */
+let lastResponse = null;
+
+/**
  * Mirrors chrome.storage.session so the hot path can answer a status question
  * without awaiting storage on every message. Kept in sync by setCanvasState().
  */
@@ -115,6 +123,33 @@ function onNativeMessage(message) {
       console.error('[proxy] request failed:', error);
       respondError(message.id, 'Extension could not handle the request: ' + error.message);
     });
+    return;
+  }
+
+  if (message.type === 'status_request') {
+    // Asked by the host when /diagnostics is hit. This arrives on the native
+    // port, not through runtime messaging, so it has to be handled here — it
+    // used to be answered only in the runtime listener, which the host can
+    // never reach, leaving /diagnostics with an empty "extension" field.
+    getCanvasState()
+      .then((state) => {
+        postToHost({
+          type: 'ext_status',
+          id: message.id,
+          data: {
+            nativeConnected: hostReady,
+            protocol: hostProtocol,
+            port: hostPort,
+            hostError,
+            canvasTabId: state.tabId,
+            canvasReady: Boolean(state.ready),
+            lastResponse
+          }
+        });
+      })
+      .catch((error) => {
+        postToHost({ type: 'ext_status', id: message.id, data: { error: error.message } });
+      });
   }
 }
 
@@ -341,6 +376,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           hostError,
           canvasTabId: state.tabId,
           canvasReady: Boolean(state.ready),
+          lastResponse,
           inflightChunkBuffers: 0
         }))
         .catch((error) => sendResponse({ ok: false, reason: error.message }));
@@ -369,13 +405,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ ok: false, reason: 'inactive Gemini tab' });
             return;
           }
-          sendResponse({ ok: postToHost({
+          let bytes = 0;
+          try {
+            bytes = JSON.stringify(message.data || null).length;
+          } catch (error) {
+            bytes = -1;
+          }
+          const ok = postToHost({
             type: 'api_response',
             id: message.id,
             status: message.status,
             data: message.data,
             error: message.error
-          }) });
+          });
+          lastResponse = { id: message.id, bytes, forwarded: ok, at: Date.now() };
+          if (!ok) console.warn('[proxy] response could not be written to the native port');
+          sendResponse({ ok });
         })
         .catch((error) => sendResponse({ ok: false, reason: error.message }));
       return true;

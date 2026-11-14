@@ -116,10 +116,17 @@ UNSUPPORTED_SCHEMA_KEYS = frozenset({
 # as a malformed native message and tear down the port.
 
 def log(message, *args):
+    """Write to stderr and to the host log.
+
+    Chrome hands the host a stderr pipe that nothing reads, so a line written
+    only there is gone. The file is the only place a user can look when the
+    browser is the thing misbehaving.
+    """
     if args:
         message = message % args
     sys.stderr.write("[proxy] %s\n" % message)
     sys.stderr.flush()
+    append_log_line(message)
 
 
 def warn(message, *args):
@@ -180,7 +187,8 @@ def host_log_path():
     )
 
 
-def record_fatal(detail):
+def append_log_line(detail):
+    """Append one timestamped line to the host log, rotating at 64 KiB."""
     try:
         path = host_log_path()
         try:
@@ -193,6 +201,10 @@ def record_fatal(detail):
                 time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid(), detail))
     except OSError:
         pass
+
+
+def record_fatal(detail):
+    append_log_line(detail)
 
 
 def token_file_path():
@@ -346,6 +358,10 @@ def unregister_request(request_id):
 
 def route_bridge_message(message):
     message_type = message.get("type")
+    # Every message the extension sends arrives here. One line per message is
+    # what makes "the page answered but nothing came back" answerable from the
+    # log instead of a service-worker console.
+    log("bridge message: %s id=%s", message_type, message.get("id") or "-")
     if message_type == "ext_status":
         request_id = message.get("id")
         with pending_lock:
