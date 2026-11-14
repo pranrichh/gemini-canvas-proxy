@@ -37,7 +37,7 @@ services:
   proxy:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile
     image: gemini-canvas-proxy:local
     container_name: gemini-canvas-proxy
 

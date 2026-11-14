@@ -162,7 +162,12 @@ surfaced as `502` with the reason preserved:
            "details": {"blockReason": "SAFETY", "safetyRatings": [...]}}}
 ```
 
-## Images in
+## Media in
+
+Images, audio, video and PDF all take the same path: the bytes go inline to
+Gemini, which accepts them natively.
+
+### Images and anything with a data URI
 
 ```json
 {
@@ -170,23 +175,49 @@ surfaced as `502` with the reason preserved:
   "messages": [{
     "role": "user",
     "content": [
-      {"type": "text", "text": "What is this?"},
-      {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBOR…"}}
+      {"type": "text", "text": "Summarise this."},
+      {"type": "image_url", "image_url": {"url": "data:application/pdf;base64,JVBER…"}}
     ]
   }]
 }
 ```
 
-`data:` URIs work out of the box. `http(s)://` URLs are refused unless
-`PROXY_ALLOW_URL_FETCH=true`, because fetching a URL the caller chose turns the
-proxy into a request forwarder. When enabled, the host resolves the hostname,
-rejects anything that is not a public address, re-checks on every redirect,
-requires an `image/*` content type, and caps the body at 20 MB. A refused image
-becomes a `[Remote image omitted: reason]` text part so the model can see that
-something was dropped.
+Despite the field name, `image_url` accepts any data URI whose media type Gemini
+takes inline: `image/*`, `audio/*`, `video/*`, and `application/pdf`. The type
+comes from the URI, so a PDF or a clip rides the same field as a picture.
 
-`file` and `input_file` parts are refused with a 400. Inline the content or send
-an image.
+### Audio, the OpenAI way
+
+```json
+{"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}
+```
+
+`format` may be `wav` or `mp3`; it becomes `audio/wav` or `audio/mpeg`.
+
+### Files
+
+```json
+{"type": "file", "file": {"filename": "paper.pdf",
+                          "file_data": "data:application/pdf;base64,JVBER…"}}
+```
+
+`file_data` may also be raw base64 with a `mime_type` beside it. File *ids* are
+refused: they need an upload step the Canvas key cannot perform, so the bytes
+have to travel with the request.
+
+### Limits and remote URLs
+
+One inline part is capped at 18 MB, which is what survives base64 and the
+native-messaging frame.
+
+Remote `http(s)://` images are off by default (`PROXY_ALLOW_URL_FETCH=true`
+enables them) because fetching a URL the caller chose turns the proxy into a
+request forwarder. When enabled the host resolves the name, rejects anything
+that is not a public address, re-checks on every redirect, requires an
+`image/*` content type and caps the body at 20 MB. A refused file becomes a
+`[Remote file omitted: reason]` text part so the model can see something was
+dropped. Remote fetching is deliberately limited to images: pulling a
+caller-supplied video is a different risk.
 
 ## Images out
 

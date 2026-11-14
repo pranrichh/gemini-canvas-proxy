@@ -65,6 +65,53 @@ class OpenAIToGeminiTests(unittest.TestCase):
             ],
         )
 
+    def test_pdf_video_and_audio_ride_the_data_uri_path(self):
+        cases = [
+            ("data:application/pdf;base64,JVBERi0=", "application/pdf"),
+            ("data:video/mp4;base64,AAAAIGZ0eXA=", "video/mp4"),
+            ("data:audio/wav;base64,UklGRg==", "audio/wav"),
+        ]
+        for uri, expected in cases:
+            with self.subTest(mime=expected):
+                result = proxy.openai_to_gemini({
+                    "messages": [{"role": "user", "content": [
+                        {"type": "text", "text": "describe"},
+                        {"type": "image_url", "image_url": {"url": uri}},
+                    ]}]
+                })
+                inline = result["contents"][0]["parts"][1]["inlineData"]
+                self.assertEqual(inline["mimeType"], expected)
+
+    def test_openai_input_audio_part(self):
+        result = proxy.openai_to_gemini({
+            "messages": [{"role": "user", "content": [
+                {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}},
+            ]}]
+        })
+        inline = result["contents"][0]["parts"][0]["inlineData"]
+        self.assertEqual(inline["mimeType"], "audio/wav")
+        self.assertEqual(inline["data"], "UklGRg==")
+
+    def test_file_part_with_base64_data(self):
+        result = proxy.openai_to_gemini({
+            "messages": [{"role": "user", "content": [
+                {"type": "file", "file": {
+                    "filename": "paper.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0=",
+                }},
+            ]}]
+        })
+        inline = result["contents"][0]["parts"][0]["inlineData"]
+        self.assertEqual(inline["mimeType"], "application/pdf")
+
+    def test_unsupported_media_type_is_refused(self):
+        with self.assertRaises(proxy.RequestError):
+            proxy.openai_to_gemini({
+                "messages": [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": "data:application/zip;base64,AAAA"}},
+                ]}]
+            })
+
     def test_assistant_tool_calls_become_function_calls(self):
         result = proxy.openai_to_gemini({
             "messages": [{

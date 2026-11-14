@@ -93,13 +93,13 @@ RUN (groupadd --system --gid 1000 proxy 2>/dev/null || \
 # Copy native host + entrypoint scripts. .dockerignore keeps the rest out
 # of the build context.
 COPY --chown=root:root native_host/ /app/native_host/
-COPY --chown=root:root entrypoint.sh /app/entrypoint.sh
-COPY --chown=root:root setup-extension.sh /app/setup-extension.sh
-COPY --chown=root:root preflight.sh /app/preflight.sh
+COPY --chown=root:root docker/entrypoint.sh /app/entrypoint.sh
+COPY --chown=root:root docker/setup-extension.sh /app/setup-extension.sh
+COPY --chown=root:root docker/preflight.sh /app/preflight.sh
 # Managed Chromium policy: BrowserSignin=0 + SyncDisabled stops Google's
 # Account Reconcilor from wiping cookie-only sessions on restart, which is
 # what keeps the Canvas login alive across container restarts.
-COPY --chown=root:root chromium-policies/managed/gemini-proxy-signin.json /etc/chromium/policies/managed/gemini-proxy-signin.json
+COPY --chown=root:root docker/chromium-policies/managed/gemini-proxy-signin.json /etc/chromium/policies/managed/gemini-proxy-signin.json
 # chmod 755 not just +x — git checkout / WSL cp can strip group/world bits,
 # so a bare `chmod +x` ends up at 0700 and the proxy user (which IS the
 # group) can't exec them.

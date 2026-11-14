@@ -594,20 +594,45 @@ def is_audio(mime):
     return (mime or "").lower().startswith("audio/")
 
 
+# Gemini accepts inline parts for these. Anything else has to go through the
+# Files API, which the Canvas key does not expose.
+INLINE_MIME_PREFIXES = ("image/", "audio/", "video/")
+INLINE_MIME_EXACT = {"application/pdf"}
+
+# One inline part has to survive base64 (4/3) and the native-messaging frame.
+MAX_INLINE_BYTES = 18 * 1024 * 1024
+
+
+def is_inline_media(mime):
+    return mime.startswith(INLINE_MIME_PREFIXES) or mime in INLINE_MIME_EXACT
+
+
 def parse_data_uri(url):
     """Return (mime, base64) from a data: URI, or raise RequestError."""
-    header, _, payload = url.partition(",")
-    if not _:
-        raise RequestError("image data URI has no comma separator")
+    header, separator, payload = url.partition(",")
+    if not separator:
+        raise RequestError("data URI has no comma separator")
     if not payload:
-        raise RequestError("image data URI is empty")
+        raise RequestError("data URI is empty")
 
     meta = header[5:] if header.startswith("data:") else header
-    mime = meta.split(";", 1)[0].strip() or "image/png"
-    if not mime.startswith("image/"):
-        raise RequestError("data URI is not an image (%s)" % mime)
+    mime = meta.split(";", 1)[0].strip().lower()
+    if not mime:
+        raise RequestError("data URI declares no media type")
+    if not is_inline_media(mime):
+        raise RequestError(
+            "%s cannot be sent inline; Gemini accepts images, audio, video and PDF"
+            % mime
+        )
     if ";base64" not in meta:
-        raise RequestError("image data URI must be base64-encoded")
+        raise RequestError("data URI must be base64-encoded")
+
+    # Base64 is 4/3 of the payload size.
+    if len(payload) * 0.75 > MAX_INLINE_BYTES:
+        raise RequestError(
+            "attachment is larger than the %d MB Gemini accepts inline"
+            % (MAX_INLINE_BYTES // (1024 * 1024))
+        )
     return mime, payload
 
 
@@ -640,25 +665,62 @@ def content_to_parts(content):
             if not isinstance(url, str) or not url:
                 raise RequestError("image_url part has no URL")
             if url.startswith("data:"):
+                # A data URI carries its own media type, so a PDF or a video
+                # rides the same path as a picture.
                 mime, payload = parse_data_uri(url)
                 parts.append({"inlineData": {"mimeType": mime, "data": payload}})
             elif url.startswith(("http://", "https://")):
                 # Canvas cannot fetch arbitrary URLs, and fileData needs an
                 # upload step the Canvas key does not permit, so the host
-                # fetches and inlines the bytes itself.
+                # fetches and inlines the bytes itself. Restricted to images:
+                # pulling a caller-supplied video is not worth the surface.
                 try:
                     mime, payload = fetch_remote_image(url)
                     parts.append({"inlineData": {"mimeType": mime, "data": payload}})
                 except ImageFetchError as exc:
                     log_dropped_image(url, str(exc))
-                    parts.append({"text": "[Remote image omitted: %s]" % exc})
+                    parts.append({"text": "[Remote file omitted: %s]" % exc})
             else:
-                raise RequestError("unsupported image URL scheme")
+                raise RequestError("unsupported URL scheme")
+
+        elif part_type == "input_audio":
+            audio = part.get("input_audio") or {}
+            payload = audio.get("data")
+            if not payload:
+                raise RequestError("input_audio part has no data")
+            fmt = (audio.get("format") or "wav").lower()
+            parts.append({"inlineData": {
+                "mimeType": "audio/%s" % ("mpeg" if fmt in ("mp3", "mpeg") else fmt),
+                "data": payload,
+            }})
 
         elif part_type in ("file", "input_file"):
-            raise RequestError(
-                "file parts are not supported; inline the content or send an image"
-            )
+            # OpenAI-style file part: either a data URI or raw base64 plus a
+            # mime type. Gemini takes it inline as long as the type is one it
+            # accepts, which covers PDF and video.
+            blob = part.get("file") or part.get("input_file") or {}
+            if not isinstance(blob, dict):
+                raise RequestError("file part is malformed")
+
+            data = blob.get("file_data") or blob.get("data")
+            if not data:
+                raise RequestError(
+                    "file parts must carry base64 file_data; file ids are not "
+                    "supported because the Canvas key cannot fetch them"
+                )
+            if data.startswith("data:"):
+                mime, payload = parse_data_uri(data)
+            else:
+                mime = (blob.get("mime_type") or blob.get("mimeType") or "").lower()
+                if not mime:
+                    raise RequestError("file part needs a mime_type")
+                if not is_inline_media(mime):
+                    raise RequestError(
+                        "%s cannot be sent inline; Gemini accepts images, audio, "
+                        "video and PDF" % mime
+                    )
+                payload = data
+            parts.append({"inlineData": {"mimeType": mime, "data": payload}})
 
         # Unknown part types are skipped: clients add fields like
         # `cache_control` that have no Gemini equivalent, and failing the whole
