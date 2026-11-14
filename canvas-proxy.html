@@ -1037,11 +1037,17 @@ function handshake() {
   channel.port1.start();
   state.port = channel.port1;
 
-  // A sandboxed frame cannot read its parent's origin, so `*` is the only
-  // usable target. The receiving side is what provides the security: the
-  // content script refuses the port unless it came from a direct child frame
-  // or an opaque-origin (sandboxed) frame on this page.
-  window.parent.postMessage({ source: 'gemini-proxy-ready' }, '*', [channel.port2]);
+  // Address the top document, not the immediate parent. Canvas does not always
+  // put the preview one level down: it can sit inside an intermediate sandbox
+  // frame, and that frame has no relay to receive the port. `window.top` is the
+  // Gemini page in every layout, and postMessage crosses origins freely.
+  //
+  // A sandboxed frame cannot read its target's origin, so `*` is the only
+  // usable targetOrigin. The receiving side provides the security: it accepts
+  // the port only from a frame on Google's usercontent origin, an opaque-origin
+  // frame, or a direct child of the page.
+  const host = window.top || window.parent;
+  host.postMessage({ source: 'gemini-proxy-ready' }, '*', [channel.port2]);
 
   state.retryTimer = setTimeout(() => {
     if (!state.handshaked) handshake();

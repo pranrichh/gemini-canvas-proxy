@@ -9,3 +9,5 @@
 2026-11-14 11:57:24  pid=101799  started on 127.0.0.1:40013 in native role, caller=<none>
 2026-11-14 11:57:24  pid=101799  native port closed after 0.3s — Chrome ended the session
 2026-11-14 11:57:25  pid=101809  started on 127.0.0.1:43403 in http-only role, caller=<none>
+2026-11-14 12:11:47  pid=101393  native port closed after 978.3s — Chrome ended the session
+2026-11-14 12:11:48  pid=104872  started on 127.0.0.1:8765 in native role, caller=chrome-extension://kcidbnpeibggdeoipjekkedddfnmjbji/
