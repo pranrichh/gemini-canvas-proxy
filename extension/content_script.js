@@ -70,14 +70,37 @@ function refreshBridgeState() {
  * Hand one answer to the service worker.
  *
  * An image or a speech clip is megabytes of base64, and a message that size
- * does not survive the hop: the send fails and the worker never learns the page
- * answered, so the host waits out its whole timeout on a request that finished
- * in eleven seconds. Split anything large into numbered pieces and let the
- * service worker put it back together. Small answers take the direct path.
+ * does not survive the hop, so anything large goes as numbered pieces the
+ * worker reassembles.
+ *
+ * The pieces are sent one after another, each awaited, with a retry. Firing
+ * them in a tight loop looked equivalent and was not: the first message wakes a
+ * sleeping service worker and the rest can be refused while it is still
+ * starting, which loses a chunk, leaves the set incomplete, and the host waits
+ * out its timeout on a request the page finished long ago.
  */
-const RESPONSE_CHUNK_CHARS = 256 * 1024;
+const RESPONSE_CHUNK_CHARS = 192 * 1024;
+const SEND_ATTEMPTS = 4;
 
-function deliverResponse(message) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendToWorker(message) {
+  for (let attempt = 0; attempt < SEND_ATTEMPTS; attempt += 1) {
+    try {
+      await chrome.runtime.sendMessage(message);
+      return true;
+    } catch (error) {
+      // "Could not establish connection" while the worker boots, or a torn
+      // down context. Both are worth one more try before the answer is lost.
+      await sleep(120 * (attempt + 1));
+    }
+  }
+  return false;
+}
+
+async function deliverResponse(message) {
   let body;
   try {
     body = { status: message.status, data: message.data === undefined ? null : message.data,
@@ -95,20 +118,20 @@ function deliverResponse(message) {
   }
 
   if (json.length <= RESPONSE_CHUNK_CHARS) {
-    chrome.runtime.sendMessage(Object.assign({ type: 'api_response', id: message.id },
-                                             JSON.parse(json))).catch(() => {});
+    await sendToWorker(Object.assign({ type: 'api_response', id: message.id }, JSON.parse(json)));
     return;
   }
 
   const total = Math.ceil(json.length / RESPONSE_CHUNK_CHARS);
   for (let index = 0; index < total; index += 1) {
-    chrome.runtime.sendMessage({
+    const ok = await sendToWorker({
       type: 'api_response_chunk',
       id: message.id,
       total_chunks: total,
       chunk_index: index,
       chunk_data: json.slice(index * RESPONSE_CHUNK_CHARS, (index + 1) * RESPONSE_CHUNK_CHARS)
-    }).catch(() => {});
+    });
+    if (!ok) return;
   }
 }
 
@@ -127,7 +150,9 @@ window.addEventListener('message', (event) => {
     if (!message) return;
 
     if (message.source === 'gemini-proxy-response') {
-      deliverResponse(message);
+      deliverResponse(message).catch((error) => {
+        console.error('[proxy] could not hand the answer over:', error);
+      });
       return;
     }
 

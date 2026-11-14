@@ -49,6 +49,11 @@ jobs:
       - name: Check the service-worker relay guard
         run: node tests/extension/relay-guard.js
 
+      # The page's side of the same hop: an answer too large for one message,
+      # and a worker that refuses the first attempts while it boots.
+      - name: Check response delivery
+        run: node tests/extension/response-delivery.js
+
   docs:
     runs-on: ubuntu-latest
     steps:

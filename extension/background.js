@@ -346,7 +346,13 @@ function collectResponseChunk(message) {
   if (!Number.isInteger(index) || index < 0 || index >= total) return null;
   if (typeof data !== 'string') return null;
 
-  const entry = pendingResponses.get(id) || { parts: new Array(total), total };
+  const now = Date.now();
+  for (const [key, value] of pendingResponses) {
+    if (now - value.updatedAt > 120000) pendingResponses.delete(key);
+  }
+
+  const entry = pendingResponses.get(id) || { parts: new Array(total), total, updatedAt: now };
+  entry.updatedAt = now;
   if (entry.total !== total) {
     pendingResponses.delete(id);
     return null;
