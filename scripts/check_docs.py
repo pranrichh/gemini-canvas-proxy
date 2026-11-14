@@ -20,10 +20,10 @@ ROOT = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 DOC_FILES = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
 CODE_FILES = [
     ROOT / "native_host" / "gemini_proxy.py",
-    ROOT / "entrypoint.sh",
-    ROOT / "setup.sh",
-    ROOT / "setup-extension.sh",
     ROOT / "native_host" / "gemini_proxy_bridge.sh",
+    ROOT / "docker" / "entrypoint.sh",
+    ROOT / "docker" / "setup-extension.sh",
+    ROOT / "setup.sh",
 ]
 
 ENV_PATTERN = re.compile(r"\b(PROXY_[A-Z_]+|BROWSER_DATA_DIR|CHROMIUM_USER_DATA_DIR|NATIVE_HOST_DIR|NOVNC_PORT|VNC_PORT|NOVNC_WEB|DISPLAY)\b")
