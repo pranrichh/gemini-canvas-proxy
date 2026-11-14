@@ -563,6 +563,9 @@ const API_ORIGIN = 'https://generativelanguage.googleapis.com';
 const API_PATH = /^\/v1beta\/models\/([A-Za-z0-9._-]+):(generateContent|streamGenerateContent)$/;
 const PING_MS = 5000;
 const MISSED_BEFORE_OFFLINE = 3;
+// How long "Connecting" is allowed to mean anything. Past this, silence is a
+// missing relay rather than a slow one.
+const CONNECT_GRACE_MS = 8000;
 const RETRY_MS = 1500;
 const MAX_ROWS = 100;
 
@@ -588,9 +591,12 @@ const state = {
   stats: { requests: 0, answered: 0, failed: 0, inbound: 0, outbound: 0, total: 0,
            opened: 0, settled: 0 },
   // A relay that never arrived is still trying; one that was here and left is
-  // broken. Without this the page says "Connecting" forever and keeps the
-  // travel animation running over a dead link.
+  // broken. "Still trying" only holds for a few seconds — after that the honest
+  // word is that nothing is there, which is the difference between a page
+  // waiting for a slow load and one whose extension is switched off.
   everConnected: false,
+  lastSeenAt: Date.now(),
+  stalled: false,
   // The last Gemini call this page made and has not finished. A request that
   // never comes back is either still here or never arrived, and only the page
   // can say which.
@@ -647,8 +653,8 @@ function renderStatus() {
   let key = 'ready';
 
   if (!state.handshaked) {
-    key = state.everConnected ? 'down' : 'degraded';
-    word = state.everConnected ? 'Disconnected' : 'Connecting';
+    key = (state.everConnected || state.stalled) ? 'down' : 'degraded';
+    word = state.everConnected ? 'Disconnected' : (state.stalled ? 'No relay' : 'Connecting');
   } else if (!state.nativeConnected) {
     key = 'down';
     word = 'Host offline';
@@ -663,7 +669,8 @@ function renderStatus() {
   }
 
   setNode($('n-canvas'), $('v-canvas'), true, 'running');
-  setNode($('n-relay'), $('v-relay'), state.handshaked, state.handshaked ? 'relaying' : 'waiting');
+  setNode($('n-relay'), $('v-relay'), state.handshaked,
+    state.handshaked ? 'relaying' : (state.stalled || state.everConnected ? 'offline' : 'waiting'));
   setNode($('n-host'), $('v-host'), state.nativeConnected, state.nativeConnected ? 'connected' : 'offline');
 
   // Green means the whole chain carries traffic, so a wire is only on when
@@ -671,8 +678,8 @@ function renderStatus() {
   // it stops the moment a link that had been up goes down, because waiting for
   // something that is gone is not a connection attempt.
   const live = state.handshaked && state.nativeConnected;
-  const starting = !state.handshaked && !state.everConnected;
-  const lost = !state.handshaked && state.everConnected;
+  const lost = !state.handshaked && (state.everConnected || state.stalled);
+  const starting = !state.handshaked && !lost;
 
   const relayWire = $('w-relay');
   relayWire.dataset.on = live ? '1' : '0';
@@ -1196,12 +1203,16 @@ function handshake() {
       state.protocol = data.protocol || 0;
       state.hostError = data.error || '';
       state.missed = 0;
+      state.lastSeenAt = Date.now();
+      state.stalled = false;
       renderStatus();
       return;
     }
 
     if (data.source === 'gemini-proxy-pong') {
       state.missed = 0;
+      state.lastSeenAt = Date.now();
+      state.stalled = false;
       state.nativeConnected = Boolean(data.nativeConnected);
       state.hostPort = data.port || state.hostPort;
       state.hostError = data.error || '';
@@ -1235,6 +1246,14 @@ function handshake() {
 
 function startHeartbeat() {
   setInterval(() => {
+    // Silence is information even when there is nothing to ping: with no port
+    // this used to return before counting anything, so an extension that was
+    // switched off left the page on "Connecting", arrow running, forever.
+    if (!state.handshaked && Date.now() - state.lastSeenAt > CONNECT_GRACE_MS) {
+      state.stalled = true;
+      renderStatus();
+    }
+
     if (!state.port) return;
     state.pingSeq += 1;
     post({ source: 'gemini-proxy-ping', seq: state.pingSeq });
