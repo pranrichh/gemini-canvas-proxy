@@ -44,8 +44,10 @@ if (-not $pythonExe) {
     Write-Host "[ERROR] Python not found. Install Python 3.8+ from https://python.org" -ForegroundColor Red
     exit 1
 }
-# Get the full path to python.exe (resolve any aliases)
-$PythonPath = (Get-Command python).Source
+# Resolve the interpreter that was actually found. Re-querying `python` here
+# would return the Microsoft Store shim, or nothing at all on a machine that
+# only has `python3`.
+$PythonPath = $pythonExe.Source
 Write-Host "[OK] Python found: $PythonPath" -ForegroundColor Green
 
 if (-not (Test-Path $TokenFile) -or [string]::IsNullOrWhiteSpace((Get-Content $TokenFile -Raw))) {

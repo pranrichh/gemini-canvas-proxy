@@ -1,75 +1,70 @@
 #!/usr/bin/env bash
-# ──────────────────────────────────────────────────────────────────────────────
-# Gemini Canvas Proxy — post-extension-load setup
-# ──────────────────────────────────────────────────────────────────────────────
-# Run AFTER loading the unpacked extension in the noVNC browser and copying
-# the Extension ID. Writes the native messaging manifest into
-# $BROWSER_DATA_DIR/NativeMessagingHosts/ so Chromium can find it on next
-# launch (it reads the manifest from the user-data-dir's parent dir on
-# Linux).
+# ─────────────────────────────────────────────────────────────────────────────
+# Register the native messaging host inside the container.
 #
-# Usage:
+# Chromium reads native messaging manifests from a handful of places; the one
+# that needs no system-wide install and no extra flags is
+# <user-data-dir>/NativeMessagingHosts/. Since the container's Chromium already
+# runs with --user-data-dir=/browser-data/chromium-profile, writing there is
+# enough. Restart Chromium afterwards — it reads the directory at startup only.
+#
 #   docker compose exec proxy /app/setup-extension.sh <extension-id>
-#   docker compose exec proxy /app/setup-extension.sh  # interactive prompt
-#
-# After running this once, restart the container (or just relaunch Chromium)
-# and the native messaging host will be available to the extension.
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ── Setup ─────────────────────────────────────────────────────────────────────
-# Determine where Chromium will look for the manifest.
-#
-# Chromium reads native messaging manifests from one of these locations:
-#   1. <user-data-dir>/NativeMessagingHosts/<name>.json  (per-profile)
-#   2. A path registered via the --native-messaging-hosts CLI flag
-#   3. OS-defined system paths (Linux: /etc/chromium/native-messaging-hosts/)
-#
-# We use option 1 — write the manifest inside the Chromium user-data-dir so
-# it's discovered automatically without extra CLI flags. The setup script
-# lets the user override NATIVE_HOST_DIR if they want option 2 or 3.
+set -euo pipefail
+
 CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR:-/browser-data/chromium-profile}"
 NATIVE_HOST_DIR="${NATIVE_HOST_DIR:-$CHROMIUM_USER_DATA_DIR/NativeMessagingHosts}"
 MANIFEST_PATH="$NATIVE_HOST_DIR/com.gemini.proxy.json"
-HOST_SCRIPT="/app/native_host/gemini_proxy_bridge.sh"
+HOST_SCRIPT="${HOST_SCRIPT:-/app/native_host/gemini_proxy_bridge.sh}"
 
-if [ -n "${1:-}" ]; then
-    EXTENSION_ID="$1"
-else
-    echo "Paste your Extension ID (32 chars):"
+EXTENSION_ID="${1:-}"
+if [ -z "$EXTENSION_ID" ]; then
+    if [ ! -t 0 ]; then
+        echo "usage: $0 <extension-id>" >&2
+        exit 2
+    fi
+    printf 'Extension ID: '
     read -r EXTENSION_ID
 fi
 
-if [ -z "$EXTENSION_ID" ]; then
-    echo "ERROR: no extension ID provided" >&2
+if ! [[ "$EXTENSION_ID" =~ ^[a-p]{32}$ ]]; then
+    echo "error: '$EXTENSION_ID' is not a Chrome extension ID." >&2
+    echo "       IDs are exactly 32 characters from a to p." >&2
     exit 1
 fi
 
-if ! [[ "$EXTENSION_ID" =~ ^[a-p]{32}$ ]]; then
-    echo "ERROR: invalid extension ID" >&2
-    echo "Chrome extension IDs must contain exactly 32 characters from a-p." >&2
+if [ ! -x "$HOST_SCRIPT" ]; then
+    echo "error: $HOST_SCRIPT is missing or not executable." >&2
+    echo "       If you bind-mounted an older checkout, rebuild the image." >&2
     exit 1
 fi
 
 mkdir -p "$NATIVE_HOST_DIR"
-
 cat > "$MANIFEST_PATH" <<EOF
 {
-    "name": "com.gemini.proxy",
-    "description": "Gemini Canvas Proxy — free unlimited LLM API via Canvas MessageChannel bridge",
-    "path": "$HOST_SCRIPT",
-    "type": "stdio",
-    "allowed_origins": ["chrome-extension://$EXTENSION_ID/"]
+  "name": "com.gemini.proxy",
+  "description": "Gemini Canvas Proxy — OpenAI-compatible API backed by a Canvas tab",
+  "path": "$HOST_SCRIPT",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://$EXTENSION_ID/"]
 }
 EOF
+chmod 644 "$MANIFEST_PATH"
+
+python3 - "$MANIFEST_PATH" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    json.load(handle)
+PY
 
 echo ""
-echo "✓ Wrote native messaging manifest to $MANIFEST_PATH"
-echo "  path:     $HOST_SCRIPT"
-echo "  allowed:  chrome-extension://$EXTENSION_ID/"
+echo "✓ manifest written to $MANIFEST_PATH"
+echo "  host:    $HOST_SCRIPT"
+echo "  allowed: chrome-extension://$EXTENSION_ID/"
 echo ""
-echo "Restart Chromium inside the container to pick up the manifest:"
-echo "  docker compose exec proxy pkill -f chromium"
-echo "  (the entrypoint's tail will then exit; restart with docker compose up -d)"
+echo "Restart so Chromium re-reads it:"
+echo "  docker compose restart proxy"
 echo ""
-echo "Then test the proxy:"
-echo "  curl http://127.0.0.1:8765/v1/models"
+echo "Then check:"
+echo "  curl -s http://127.0.0.1:8765/health"
