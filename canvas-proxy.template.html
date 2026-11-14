@@ -88,16 +88,15 @@
 
   .head {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 22px;
-    flex-wrap: wrap;
+    gap: 14px;
   }
 
   /* The mark carries the name, so no wordmark is repeated beside it. */
   .mark {
-    width: 62px;
-    height: 62px;
+    width: 84px;
+    height: 84px;
     display: block;
     filter: drop-shadow(0 6px 26px rgba(255, 46, 147, 0.28));
   }
@@ -136,6 +135,7 @@
     font-size: 13px;
     font-weight: 400;
     color: var(--text);
+    margin-left: 8px;
   }
 
   .dot {
@@ -152,13 +152,6 @@
   .status[data-state="degraded"] .dot { background: var(--idle); }
   .status[data-state="down"] .dot { background: var(--bad); box-shadow: 0 0 0 3px rgba(255, 95, 95, 0.18); }
   .status[data-state="down"] .status-word { color: var(--bad); }
-
-  .status-note {
-    margin-top: 4px;
-    font-size: 13px;
-    color: var(--muted);
-    min-height: 20px;
-  }
 
   /* ── signal path ──────────────────────────────────────────── */
 
@@ -493,13 +486,12 @@
 
 <main class="panel">
   <header class="head">
-    <span class="mark" aria-hidden="true"><!--LOGO--></span>
     <img class="banner" id="banner" src="<!--BANNER-->" alt="Gemini Canvas Proxy — free unlimited Gemini API for any OpenAI-compatible app" aria-hidden="true">
+    <span class="mark" aria-hidden="true"><!--LOGO--></span>
   </header>
 
   <div class="status" id="status" data-state="degraded" role="status" aria-live="polite">
     <div class="status-word"><span class="dot"></span><span id="status-word">Connecting</span></div>
-    <div class="status-note" id="status-note">Waiting for the relay.</div>
   </div>
 
   <section class="path" aria-label="Connection path">
@@ -632,27 +624,23 @@ function setNode(node, valueNode, on, text) {
 
 function renderStatus() {
   let word = 'Ready';
-  let note = 'Requests are being served.';
   let key = 'ready';
 
   if (!state.handshaked) {
     key = 'degraded';
     word = 'Connecting';
-    note = 'Waiting for the extension to answer.';
   } else if (!state.nativeConnected) {
     key = 'down';
     word = 'Host offline';
-    note = state.hostError || 'Run ./setup.sh, then reload the extension.';
   }
 
   $('status').dataset.state = key;
 
   if (key === 'ready') {
-    $('status-word').innerHTML = 'Ready at <code>' + endpointUrl() + '</code>';
+    $('status-word').innerHTML = 'Ready at<code>' + endpointUrl() + '</code>';
   } else {
     $('status-word').textContent = word;
   }
-  $('status-note').textContent = note;
 
   setNode($('n-canvas'), $('v-canvas'), true, 'running');
   setNode($('n-relay'), $('v-relay'), state.handshaked, state.handshaked ? 'relaying' : 'waiting');

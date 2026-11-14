@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.svg" width="128" height="128" alt="">
+</p>
+
 # Gemini Canvas Proxy
 
 An OpenAI-compatible HTTP endpoint backed by a Gemini Canvas tab.
@@ -153,7 +157,10 @@ personal tool, not as infrastructure you depend on.
 ## Project layout
 
 ```text
-canvas-proxy.html        the page you paste into Canvas
+canvas-proxy.html        the page you paste into Canvas (generated)
+canvas-proxy.template.html  source for that page; edit this one
+logo.svg, assets/        mark and README banner, inlined at build time
+scripts/build_page.py    inlines both into canvas-proxy.html
 extension/               MV3 service worker + content-script relay
 native_host/
   gemini_proxy.py        HTTP server, native messaging host, format translation
