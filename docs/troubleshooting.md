@@ -65,7 +65,7 @@ which fails on `<!DOCTYPE html>` with `Expected identifier but found "!"`.
 
 Two different frames were answering. The content script runs in every frame
 (all_frames), and `chrome.tabs.sendMessage` delivers to all of them — first
-reply wins. Version 2 makes only the top frame answer when it has no relay, and
+reply wins. Only the top frame answers when it has no relay, and
 accepts the Canvas frame from Google's usercontent origin, which is what a
 sandboxed preview actually reports. If you are seeing this, the extension is
 older than the page: reload it at `chrome://extensions` and reload the tab.

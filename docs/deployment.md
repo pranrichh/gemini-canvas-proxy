@@ -89,7 +89,7 @@ on `/tmp/gemini-canvas-proxy.sock`. Chromium separately launches
 `gemini_proxy_bridge.sh`, which runs `--bridge-only` and pumps stdio to that
 socket.
 
-The split is not decoration. Chromium restarts its native host whenever the
+Chromium restarts its native host whenever the
 service worker is recycled; if that process also owned the TCP listener, every
 restart would drop the port and clients would see connection refused. With the
 split, the HTTP side stays up and simply reports `502 bridge unavailable` for

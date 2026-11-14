@@ -17,7 +17,7 @@ Docker.
 | GET | `/health` | no | liveness plus bridge state, for healthchecks |
 | OPTIONS | any | no | CORS preflight, only useful with `PROXY_ALLOWED_ORIGIN` |
 
-`/health` is deliberately unauthenticated and deliberately dull:
+`/health` needs no token, so a healthcheck needs no secret:
 
 ```json
 {
@@ -216,8 +216,7 @@ request forwarder. When enabled the host resolves the name, rejects anything
 that is not a public address, re-checks on every redirect, requires an
 `image/*` content type and caps the body at 20 MB. A refused file becomes a
 `[Remote file omitted: reason]` text part so the model can see something was
-dropped. Remote fetching is deliberately limited to images: pulling a
-caller-supplied video is a different risk.
+dropped. Only images can be fetched remotely.
 
 ## Images out
 

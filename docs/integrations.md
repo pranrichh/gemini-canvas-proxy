@@ -172,4 +172,4 @@ it locally, and the result returns as a `functionResponse`.
 
 The proxy implements `/v1/chat/completions` and `/v1/models`. If a client needs
 `/v1/completions` (the old text-completion endpoint) or `/v1/embeddings`, it
-will not work — those are not implemented rather than emulated badly.
+will not work.

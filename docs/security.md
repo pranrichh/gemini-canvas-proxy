@@ -16,7 +16,7 @@ the token is all that stands between a stranger and your Gemini quota.
 |---|---|---|
 | Listen address | `127.0.0.1` | `PROXY_BIND` |
 | Authentication | required on every `/v1` route and `/status` | `PROXY_TOKEN`, `PROXY_TOKEN_FILE` |
-| `/health` | open, by design | — |
+| `/health` | open | — |
 | CORS | no `Access-Control-Allow-Origin` unless an origin is named | `PROXY_ALLOWED_ORIGIN` |
 | Max request body | 32 MB, refused before the body is read | `PROXY_MAX_REQUEST_BYTES` |
 | Token file mode | `0600` | `setup.sh`, `entrypoint.sh` |
@@ -45,7 +45,7 @@ Details that matter:
 - Traffic after the handshake rides a private `MessagePort`. Nothing is
   broadcast to `window` and there is no discoverable endpoint.
 
-One caveat, stated plainly: the handshake itself is a `postMessage` to the
+The handshake itself is a `postMessage` to the
 parent frame, and a sandboxed frame cannot read its parent's origin, so it goes
 out with `targetOrigin: "*"`. The receiving content script is what enforces the
 policy — it accepts a direct child frame or an opaque-origin (sandboxed) frame
@@ -74,12 +74,11 @@ With `PROXY_ALLOW_URL_FETCH=true`:
 
 There is a residual DNS-rebinding window: the address is validated, then
 `urllib` resolves the name again when it connects. Closing it properly needs a
-pinned-IP connection. Given that the feature is opt-in and the proxy is
-loopback-only by default, that gap is documented rather than papered over.
+pinned-IP connection. The feature is opt-in and the proxy is loopback-only by default.
 
 ## Canvas-side validation
 
-The Canvas page is the last line, and it is deliberately narrow:
+The Canvas page is the last line, and it is narrow:
 
 - the request path must match
   `/v1beta/models/<model>:(generateContent|streamGenerateContent)`;

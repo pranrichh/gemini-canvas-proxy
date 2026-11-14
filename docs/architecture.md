@@ -95,7 +95,7 @@ If Canvas stops injecting, `apiKey` stays empty and the page reports "Canvas did
 not inject an API key" rather than sending an unauthenticated request that would
 fail in a less obvious way later.
 
-## Wire protocol (version 2)
+## Messages
 
 Native messaging frames everything as a 4-byte native-endian length followed by
 UTF-8 JSON. Chrome caps host→browser messages at 1 MiB and browser→host at
@@ -168,8 +168,7 @@ holds a port, which protocol it speaks, and whether Canvas substituted a key
 into it. A single failed request cannot tell those three apart, and the
 alternative is opening a devtools console inside a sandboxed iframe.
 
-`/health` stays deliberately dull: up, transport, bridge attached. It is what a
-healthcheck polls.
+`/health` reports three things: up, transport, bridge attached.
 
 ## Two deployment shapes
 
